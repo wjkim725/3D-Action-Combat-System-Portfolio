@@ -361,23 +361,46 @@ public class HeroAnimationEventHandler : MonoBehaviour
         _hero.SwapSystem.SetIsQuickSwapWindowOpen(false);
     }
     /// <summary>
-    /// QuickAssit Window 여는 커맨드의 HitFrame에 배치
+    /// Quick Assist Window를 여는 커맨드의 HitFrame에 배치
     /// </summary>
     /// <param name="direction">0 - Next / 1 - Prev</param>
     public void OnQuickAssistWindowOpen(int direction)
     {
         if (QuickAssistManager.Instance == null ||
-            LockOnManager.Instance == null) return;
+            LockOnManager.Instance == null)
+        {
+            return;
+        }
 
         SwapDirection swapDirection = (SwapDirection)direction;
 
-        if (swapDirection != SwapDirection.Next ||
-            swapDirection != SwapDirection.Prev) return;
+        if (swapDirection != SwapDirection.Next &&
+            swapDirection != SwapDirection.Prev)
+        {
+            return;
+        }
 
-        QuickAssistManager.Instance.TryOpen
-            (_hero,
-            LockOnManager.Instance.MagneticTarget.GetComponentInParent<Enemy>(),
-            swapDirection);
+        Transform magneticTarget =
+            LockOnManager.Instance.MagneticTarget;
+
+        if (magneticTarget == null)
+        {
+            return;
+        }
+
+        Enemy assistTarget =
+            magneticTarget.GetComponentInParent<Enemy>();
+
+        if (assistTarget == null)
+        {
+            return;
+        }
+
+        QuickAssistManager.Instance.TryOpen(
+            _hero,
+            assistTarget,
+            swapDirection
+        );
     }
 
     public void OnAttackHitFrame()
