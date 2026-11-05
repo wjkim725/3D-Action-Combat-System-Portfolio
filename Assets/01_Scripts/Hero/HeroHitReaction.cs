@@ -1,11 +1,11 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 public class HeroHitReaction : MonoBehaviour
 {
     private Hero _hero;
 
-    public Enemy CurrentReactionAttacker => _currentReactionAttacker;
-    private Enemy _currentReactionAttacker;
+    public IAttacker CurrentReactionAttacker => _currentReactionAttacker;
+    private IAttacker _currentReactionAttacker;
 
     private HitType _currentHitType = HitType.None;
 
@@ -15,13 +15,15 @@ public class HeroHitReaction : MonoBehaviour
     }
 
 
+    /// <summary>피격 진입 시 공격과 스킬 입력 및 차징 신호를 정리한다.</summary>
     public void OnEnterReactionState()
     {
         _hero.ActionRegistry.ResetCombo();
-        _hero.ActionRegistry.SetIsButtonHolding(false);
+        _hero.ActionRegistry.SetIsAttackButtonHolding(false);
+        _hero.ActionRegistry.SetIsSkillButtonHolding(false);
 
         _hero.Animation.SetMoveSpeed(0f);
-        _hero.Animation.SetIsCharging(false);
+        _hero.Animation.ClearChargingParameters();
         _hero.Animation.SetIsDashAttack(false);
     }
 
@@ -104,12 +106,22 @@ public class HeroHitReaction : MonoBehaviour
         return (int)incomingHitType > (int)_currentHitType;
     }
 
+    /// <summary>
+    /// 피격 종료 후 오프필드는 퇴장하고 온필드는 Idle로 복귀함.
+    /// </summary>
     public void CompleteReaction(HitType completedHitType)
     {
         if (!_hero.IsInHitReaction) return;
 
         // 이전 피격 애니메이션의 늦은 이벤트 방어
         if (_currentHitType != completedHitType) return;
+
+        if (_hero.ActionRegistry.IsOffFieldActionActive)
+        {
+            _hero.ActionRegistry.SetOffFieldActionActive(false);
+            _hero.ChangeState(HeroState.InActive);
+            return;
+        }
 
         _hero.BackToIdle();
     }

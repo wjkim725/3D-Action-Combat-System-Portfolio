@@ -59,6 +59,36 @@ public class HeroSkillSystem : MonoBehaviour
 
     #region [내부 연산 및 헬퍼 메서드]
 
+    /// <summary>
+    /// 다음 스킬 행동의 강특 요구량과 에너지 충족 여부를 UI에 제공함.
+    /// 일반 스킬 연계 중이거나 유효한 데이터가 없으면 false를 반환함.
+    /// </summary>
+    public bool TryGetNextExSkillPreview(out float energyRequirement, out bool isReady)
+    {
+        energyRequirement = 0f;
+        isReady = false;
+
+        if (_hero == null || _hero.Status == null || _hero.ActionRegistry == null) return false;
+        HeroCombatDataSO data = _hero.CombatData;
+        if (data == null || data.exSkillData == null || data.exSkillData.Count == 0) return false;
+        if (_hero.Status.MaxEnergy <= 0f) return false;
+
+        int nextComboIndex = 0;
+        if (_hero.CurrentState == HeroState.Skill)
+        {
+            // 일반 스킬로 시작한 연계는 에너지가 회복되어도 강특으로 전환되지 않음.
+            if (!IsExSkillMode) return false;
+
+            // OnCheckCombo에서 인덱스를 증가시킨 뒤 비용을 판정하는 순서를 반영함.
+            nextComboIndex = _hero.ActionRegistry.CurrentComboIndex + 1;
+        }
+
+        nextComboIndex = Mathf.Clamp(nextComboIndex, 0, data.exSkillData.Count - 1);
+        energyRequirement = data.exSkillData[nextComboIndex].energyRequirement;
+        isReady = !_hero.Status.IsDead && _hero.Status.CurrentEnergy >= energyRequirement;
+        return true;
+    }
+
     public bool CanExecuteExSkill()
     {
         return _hero.Status.CurrentEnergy >= CurrentEnergyRequirement;
@@ -66,17 +96,15 @@ public class HeroSkillSystem : MonoBehaviour
 
     public void ExecuteExSkillSequence()
     {
+        _hero.ActionRegistry.SetIsInvincible(true);
         _hero.Status.ModifyEnergy(-CurrentEnergyRequirement);
-        //_hero.Status.ModifyEnergy(5);
         _hero.Animation.TriggerExSkill();
-        //_hero.Animation.CrossFadeToExSkill(0.1f);
         Debug.Log($"[EX Skill Combo Index] {_hero.ActionRegistry.CurrentComboIndex} / 에너지 소모: {CurrentEnergyRequirement}");
     }
 
     public void ExecuteSkillSequence()
     {
         _hero.Animation.TriggerSkill();
-        //_hero.Animation.CrossFadeToSkill(0.1f);
         Debug.Log($"[Skill Combo Index] {_hero.ActionRegistry.CurrentComboIndex}");
     }
 
@@ -95,8 +123,7 @@ public class HeroSkillSystem : MonoBehaviour
     }
 
     /// <summary>
-    /// IsExSkillMode 를 외부(애니메이션 이벤트) 등에서 변경할 때 호출
-    /// 켰으면 끄는 과정 까먹으면 안됨!!!!!
+    /// IsExSkillMode 를 외부에서 변경할 때 호출
     /// </summary>
     public void SetIsExSkillMode(bool isExSkillMode)
     {

@@ -5,13 +5,26 @@ public class EnemyAnimation : MonoBehaviour
 {
     public Animator Animator { get; private set; }
 
+    [Header("Movement Animation")]
+    [SerializeField]
+    private bool _useDirectionalMovement;
+
+    public bool UsesDirectionalMovement => _useDirectionalMovement;
+
     // 역경직 코루틴용 필드
     private Coroutine _hitStopCoroutine;
 
     private static readonly int HashIsIdle = Animator.StringToHash("IsIdle");
     private static readonly int HashMoveSpeed = Animator.StringToHash("MoveSpeed");
+    private static readonly int HashMoveX = Animator.StringToHash("MoveX");
+    private static readonly int HashMoveZ = Animator.StringToHash("MoveZ");
     private static readonly int HashIsGroggy = Animator.StringToHash("IsGroggy");
+    private static readonly int HashHitType = Animator.StringToHash("HitType");
+    private static readonly int HashHitDirection = Animator.StringToHash("HitDirection");
+    
     private static readonly int HashDeathTrigger = Animator.StringToHash("DeathTrigger");
+    private static readonly int HashCombatIdleTrigger = Animator.StringToHash("CombatIdleTrigger");
+    private static readonly int HashHitTrigger = Animator.StringToHash("HitTrigger");
 
     private void Awake()
     {
@@ -19,7 +32,7 @@ public class EnemyAnimation : MonoBehaviour
     }
 
     /// <summary>
-    /// 외부(CombatManager)에서 역경직을 명령할 때 호출하는 단 하나의 안전한 창구
+    /// 외부(CombatManager)에서 역경직을 명령할 때 호출
     /// </summary>
     /// <param name="duration">역경직 지속 시간</param>
     public void TriggerHitStop(float duration)
@@ -70,10 +83,26 @@ public class EnemyAnimation : MonoBehaviour
         Animator.SetBool(HashIsGroggy, isGroggy);
     }
 
-    public void SetMoveSpeed(float speed)
+    #region [이동 애니메이션 영역]
+
+    /// <summary>
+    /// 로컬 수평 이동 속도와 선택적으로 좌우·전후 파라미터를 Animator에 전달함.
+    /// </summary>
+    public void SetMovement(Vector3 localMoveVelocity)
     {
-        Animator.SetFloat(HashMoveSpeed, speed);
+        localMoveVelocity.y = 0f;
+        Animator.SetFloat(HashMoveSpeed, localMoveVelocity.magnitude);
+
+        if (!_useDirectionalMovement)
+        {
+            return;
+        }
+
+        Animator.SetFloat(HashMoveX, localMoveVelocity.x);
+        Animator.SetFloat(HashMoveZ, localMoveVelocity.z);
     }
+
+    #endregion
 
     public void TriggerAttack(string triggerName)
     {
@@ -92,4 +121,45 @@ public class EnemyAnimation : MonoBehaviour
     {
         Animator.ResetTrigger(HashDeathTrigger);
     }
+
+    public void TriggerCombatIdle()
+    {
+        Animator.SetTrigger(HashCombatIdleTrigger);
+    }
+    public void ResetTriggerCombatIdle()
+    {
+        Animator.ResetTrigger(HashCombatIdleTrigger);
+    }
+
+    /// <summary>
+    /// 피격 강도와 Enemy 로컬 기준 피격 방향을 Animator에 전달하고
+    /// 피격 애니메이션 전환 Trigger를 실행한다.
+    /// </summary>
+    public void PlayHitReaction(
+        HitType hitType,
+        HitReactionDirection direction)
+    {
+        if (Animator == null ||
+            hitType == HitType.None)
+        {
+            return;
+        }
+
+        Animator.SetInteger(
+            HashHitType,
+            (int)hitType);
+
+        Animator.SetInteger(
+            HashHitDirection,
+            (int)direction);
+
+        // 연속 피격에서도 Trigger가 확실하게 다시 실행되도록 초기화한다.
+        Animator.ResetTrigger(HashHitTrigger);
+        Animator.SetTrigger(HashHitTrigger);
+    }
+    public void ResetTriggerHit()
+    {
+        Animator.ResetTrigger(HashHitTrigger);
+    }
+
 }

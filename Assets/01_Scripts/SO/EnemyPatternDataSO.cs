@@ -15,10 +15,18 @@ public class EnemyPatternDataSO : ScriptableObject
     [Tooltip("해당 모션을 실행할 Animator Trigger")]
     public string animationTriggerName;
 
-    [Header("패턴 우선순위")]
-    // EnemyPattern - InitializePatterns 리스트 조립단계에서 활용
-    [Tooltip("여러 패턴이 동시에 사용 가능할 때의 선택 우선순위. 낮을수록 우선")]
-    public int priority;
+    [Header("Utility Selection")]
+    [Min(0f)]
+    [Tooltip("패턴의 기본 선호도. 높을수록 선택 점수가 높아짐.")]
+    public float basePreference = 1f;
+
+    [Tooltip("X: 최소~최대 사거리를 0~1로 환산한 거리. Y: 거리 적합도 0~1.")]
+    public AnimationCurve distanceUtilityCurve =
+        AnimationCurve.Linear(0f, 1f, 1f, 1f);
+
+    [Range(0f, 1f)]
+    [Tooltip("직전에 종료된 패턴과 같을 때 곱하는 값. 1은 감점 없음, 0은 점수 0.")]
+    public float repeatPenaltyMultiplier = 0.4f;
 
     [Header("Selection Range")]
     [Min(0f)]
@@ -30,6 +38,10 @@ public class EnemyPatternDataSO : ScriptableObject
     [Header("Cooldown")]
     [Min(0f)]
     public float cooldown;
+
+    [Header("Super Armor")]
+    [Tooltip("해당 공격 패턴의 Attack 상태 동안 적용할 슈퍼아머 등급")]
+    public HitReactionResistanceLevel superArmorLevel;
 
     [Header("Combat Data")]
     public EnemyCombatDataSO combatData;

@@ -25,6 +25,7 @@ public class PartyHUDController : MonoBehaviour
         }
 
         _partyStateManager.OnCurrentHeroChanged += HandleCurrentHeroChanged;
+        _partyStateManager.OnPartyMembersChanged += RefreshPartySlots;
         RefreshPartySlots();
 
 
@@ -44,6 +45,7 @@ public class PartyHUDController : MonoBehaviour
         if (_partyStateManager != null)
         {
             _partyStateManager.OnCurrentHeroChanged -= HandleCurrentHeroChanged;
+            _partyStateManager.OnPartyMembersChanged -= RefreshPartySlots;
         }
 
         if (_chainAttackManager != null)

@@ -10,6 +10,9 @@ public class QuickAssistManager : MonoBehaviour
     [SerializeField] private PartyStateManager _partyStateManager;
 
     private int _activeSessionId = 0;               // 빠른지원 Window 식별용 세션 ID
+    // 대상 사망·제거 이후에도 사용할 창 개방 시점의 위치와 방향.
+    private Vector3 _assistTargetPosition;
+    private Vector3 _assistTargetForward;
     public bool IsWindowOpen { get; private set; }
     public Hero TriggerHero { get; private set; }   // 빠른지원 발동 Hero
     public Hero AssistHero { get; private set; }    // 빠른지원 등장 Hero
@@ -37,7 +40,7 @@ public class QuickAssistManager : MonoBehaviour
     }
 
 
-    public bool TryOpen(Hero triggerHero, Enemy assistTarget, SwapDirection direction)
+    public bool TryOpen(Hero triggerHero, IAttacker assistTarget, SwapDirection direction)
     {
         ResolvePartyStateManager();
 
@@ -45,6 +48,9 @@ public class QuickAssistManager : MonoBehaviour
         if (triggerHero == null) return false;
         if (triggerHero.Status == null || triggerHero.Status.IsDead) return false;
         if (_partyStateManager.CurrentHero == null) return false;
+        if (assistTarget is not Enemy enemy) return false;
+        if (enemy == null || !enemy.isActiveAndEnabled || enemy.Status == null || enemy.Status.IsDead)
+            return false;
 
         Hero assistHero = GetAssistHero(direction);
 
@@ -58,6 +64,7 @@ public class QuickAssistManager : MonoBehaviour
             return false;
         }
 
+
         // 앞선 QuickAssist 윈도우가 열려있었다면 닫고 교체 Replaced 기록
         if (IsWindowOpen)
         {
@@ -67,7 +74,9 @@ public class QuickAssistManager : MonoBehaviour
         _activeSessionId++;
         TriggerHero = triggerHero;
         AssistHero = assistHero;
-        AssistTarget = assistTarget;
+        AssistTarget = enemy;
+        _assistTargetPosition = enemy.transform.position;
+        _assistTargetForward = enemy.transform.forward;
         CurrentSwapDirection = direction;
         IsWindowOpen = true;
 
@@ -120,12 +129,23 @@ public class QuickAssistManager : MonoBehaviour
             return false;
         }
 
+        Vector3 targetPosition = _assistTargetPosition;
+        Vector3 targetForward = _assistTargetForward;
+        if (AssistTarget != null && AssistTarget.isActiveAndEnabled &&
+            AssistTarget.Status != null && !AssistTarget.Status.IsDead)
+        {
+            targetPosition = AssistTarget.transform.position;
+            targetForward = AssistTarget.transform.forward;
+        }
+
         context = new QuickAssistContext(
             _activeSessionId,
             TriggerHero,
             AssistHero,
             AssistTarget,
-            CurrentSwapDirection
+            CurrentSwapDirection,
+            targetPosition,
+            targetForward
         );
 
         return true;
@@ -189,6 +209,8 @@ public class QuickAssistManager : MonoBehaviour
         TriggerHero = null;
         AssistHero = null;
         AssistTarget = null;
+        _assistTargetPosition = Vector3.zero;
+        _assistTargetForward = Vector3.forward;
 
         OnWindowClosed?.Invoke(closeReason);
     }

@@ -16,10 +16,10 @@ public class InputManager : MonoBehaviour
     public Vector2 MoveInput { get; private set; }
 
     [Header("LockOn Settings")]
-    private float _mouseDeltaThreshold = 50f;           // 하드 록온 변경점 (마우스 입력)
+    private float _mouseDeltaThreshold = 40f;           // 하드 록온 변경점 (마우스 입력)
     private float _directionChangeThreshold = 0.5f;     // 소프트 록온 변경점 (키 입력)
     private bool _canSwitchTarget = true;       // 튕기기 입력 가능 여부 플래그
-    private float _SwitchCoolTime = 0.15f;      // 최소 입력 제한 시간 (초)
+    private float _SwitchCoolTime = 0.1f;      // 최소 입력 제한 시간 (초)
     [HideInInspector]
     public bool IsLockOnActive;     // 외부에서 통제할 플래그 (취급주의)
     private Vector2 _lastMoveInput = Vector2.zero;  // 이전 프레임의 방향키 입력 값을 저장하여 입력의 변화율을 계산할 때 사용
@@ -63,17 +63,23 @@ public class InputManager : MonoBehaviour
     public event Action OnChainPrevPerformed;
     public event Action OnChainNextPerformed;
     public event Action OnChainCancelPerformed;
+    public event Action OnToggleSettingsPerformed;
 
     #endregion
 
     [Header("QTE Flag")]
     public bool IsChainQTEInputActive => _isChainQTEInputActive;
-    private bool _isChainQTEInputActive;
+    private bool _isChainQTEInputActive;    // QTE 창에 들어왔는지 여부 (InputActions Map 관리용)
+    private bool _isChainQTEInputReady;     // 설정된 _chainQTEInputDelay 이 지나서 입력받을 수 있는지
 
     [Header("QTE Input Settings")]
     [SerializeField, Min(0f)] private float _chainQTEInputDelay = 0.4f;
     private Coroutine _chainQTEInputCoroutine;
 
+    [Header("Settings Flag")]
+    private bool _isSettingsInputActive;
+    public bool IsSettingsInputActive => _isSettingsInputActive;
+    public bool IsModalInputActive { get; private set; }
 
 
     private void Awake()
@@ -84,10 +90,10 @@ public class InputManager : MonoBehaviour
             return;
         }
         Instance = this;
-        DontDestroyOnLoad(gameObject);
 
         // 컨트롤 객체 생성
         _controls = new HeroActions();
+        _controls.System.ToggleSettings.performed += HandleToggleSettings;
 
         // 이벤트 구독 및 다이렉트 토스 (람다식 방식)
         // [Dash]
@@ -130,22 +136,26 @@ public class InputManager : MonoBehaviour
         _controls.ChainQTE.SelectPrev.performed += ctx => OnChainPrevPerformed?.Invoke();
         _controls.ChainQTE.SelectNext.performed += ctx => OnChainNextPerformed?.Invoke();
         _controls.ChainQTE.Cancel.performed += ctx => OnChainCancelPerformed?.Invoke();
-    }
 
+        // [Settings Toggle]
+        // SettingsUI 에서 구독
+    }
     private void OnEnable()
     {
-        _controls.GamePlay.Enable();
-        _controls.ChainQTE.Disable();
+        if (_controls == null) return;
+        _controls.System.Enable();
+        RefreshInputMaps();
     }
     private void OnDisable()
     {
-        _controls.Disable();
+        _controls?.Disable();
+        MoveInput = Vector2.zero;
+        _lastMoveInput = Vector2.zero;
     }
-
     private void Update()
     {
-        // ChainAttack QTE 진입 시 InputManager 자체 입력 차단
-        if (_isChainQTEInputActive)
+        // ChainAttack QTE & SettingsUI 진입 시 InputManager 자체 이동 입력 차단
+        if (_isChainQTEInputActive || _isSettingsInputActive || IsModalInputActive)
         {
             MoveInput = Vector2.zero;
             _lastMoveInput = Vector2.zero;
@@ -168,6 +178,16 @@ public class InputManager : MonoBehaviour
 
         // SoftLockOnSwitch를 위해 직전 프레임 방향키 입력값 저장
         _lastMoveInput = MoveInput;
+    }
+    private void OnDestroy()
+    {
+        if (_controls != null)
+        {
+            _controls.Disable();
+            _controls.System.ToggleSettings.performed -= HandleToggleSettings;
+            _controls.Dispose();
+        }
+        if (Instance == this) Instance = null;
     }
 
     // --- 유틸리티 메서드 (외부에서 상태 체크용) ---
@@ -259,11 +279,8 @@ public class InputManager : MonoBehaviour
 
         _isChainQTEInputActive = true;
 
-        // Hero·PartySwapManager 일반 전투 입력 즉시 차단
-        _controls.GamePlay.Disable();
-
-        // 기존 QTE 입력도 잠금 상태로 초기화
-        _controls.ChainQTE.Disable();
+        _isChainQTEInputReady = false;
+        RefreshInputMaps();
 
         MoveInput = Vector2.zero;
         _lastMoveInput = Vector2.zero;
@@ -291,7 +308,8 @@ public class InputManager : MonoBehaviour
             yield break;
         }
 
-        _controls.ChainQTE.Enable();
+        _isChainQTEInputReady = true;
+        RefreshInputMaps();
         _chainQTEInputCoroutine = null;
     }
 
@@ -305,10 +323,60 @@ public class InputManager : MonoBehaviour
             _chainQTEInputCoroutine = null;
         }
 
-        // QTE 입력 차단 후 일반 입력 복구
-        _controls.ChainQTE.Disable();
-        _controls.GamePlay.Enable();
-
         _isChainQTEInputActive = false;
+        _isChainQTEInputReady = false;
+        RefreshInputMaps();
     }
+
+    #region [설정창 입력과 InputAction Map 전환]
+
+    /// <summary>
+    /// 설정창 단축키를 항상 활성인 수신자에게 전달함.
+    /// </summary>
+    private void HandleToggleSettings(UnityEngine.InputSystem.InputAction.CallbackContext context)
+    {
+        if (IsModalInputActive) return;
+        OnToggleSettingsPerformed?.Invoke();
+    }
+
+    /// <summary>
+    /// 완료 팝업의 전투 및 설정 단축키 차단 상태를 변경함. UI 입력 모듈은 유지함.
+    /// </summary>
+    public void SetModalInputActive(bool active)
+    {
+        IsModalInputActive = active;
+        MoveInput = Vector2.zero;
+        _lastMoveInput = Vector2.zero;
+        RefreshInputMaps();
+    }
+
+    /// <summary>
+    /// 설정창 입력 차단 상태를 변경하고 이전 이동 입력을 제거함.
+    /// </summary>
+    public void SetSettingsInputActive(bool active)
+    {
+        _isSettingsInputActive = active;
+        MoveInput = Vector2.zero;
+        _lastMoveInput = Vector2.zero;
+        RefreshInputMaps();
+    }
+
+    /// <summary>
+    /// 설정창과 QTE 지연 상태를 함께 판단하여 전투 입력 맵을 갱신함.
+    /// -> InputAction Map 꼬임 방어
+    /// </summary>
+    private void RefreshInputMaps()
+    {
+        if (_controls == null) return;
+        bool gameplay = isActiveAndEnabled && !IsModalInputActive && !_isSettingsInputActive && !_isChainQTEInputActive;
+        bool chain = isActiveAndEnabled && !IsModalInputActive && !_isSettingsInputActive && _isChainQTEInputActive && _isChainQTEInputReady;
+        if (gameplay) _controls.GamePlay.Enable();
+        else _controls.GamePlay.Disable();
+        if (chain) _controls.ChainQTE.Enable();
+        else _controls.ChainQTE.Disable();
+    }
+
+    
+
+    #endregion
 }

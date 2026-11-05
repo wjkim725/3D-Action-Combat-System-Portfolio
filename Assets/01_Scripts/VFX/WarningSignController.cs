@@ -4,6 +4,9 @@ using UnityEngine.UI;
 
 public class WarningSignController : MonoBehaviour
 {
+    [Header("WarningSign SFX Cue")]
+    [SerializeField] private AudioCueSO _warningSignCue;
+
     [Header("References")]
     [SerializeField] private RectTransform _effectPivot;
     [SerializeField] private RawImage _horizontalBeam;
@@ -11,34 +14,38 @@ public class WarningSignController : MonoBehaviour
     [SerializeField] private RawImage _coreFlash;
     [SerializeField] private RawImage _outerGlow;
 
-    [Header("Position")]
-    [SerializeField] private float _worldHeightOffset = 1.5f;
-
     [Header("Animation")]
-    [SerializeField] private float _duration = 0.3f;
+    [SerializeField] private float _duration = 0.22f;
+
+    [Header("Screen Position")]
+    [SerializeField, Range(0f, 0.5f)]
+    private float _horizontalViewportMargin = 0.08f;
+
+    [SerializeField, Range(0f, 0.5f)]
+    private float _verticalViewportMargin = 0.1f;
 
     [Header("Beam")]
-    [SerializeField] private float _beamFadeInEnd = 0.02f;
-    [SerializeField] private float _beamHoldEnd = 0.08f;
-    [SerializeField] private float _beamFadeOutEnd = 0.18f;
-    [SerializeField] private float _beamPeakIntensity = 2.5f;
+    [SerializeField] private float _beamFadeInEnd = 0.015f;
+    [SerializeField] private float _beamHoldEnd = 0.065f;
+    [SerializeField] private float _beamFadeOutEnd = 0.21f;
+    [SerializeField] private float _beamPeakIntensity = 1.5f;
 
     [Header("Core Flash")]
     [SerializeField] private float _coreFadeInEnd = 0.02f;
     [SerializeField] private float _coreHoldEnd = 0.06f;
     [SerializeField] private float _coreFadeOutEnd = 0.12f;
-    [SerializeField] private float _corePeakIntensity = 4.5f;
-    [SerializeField] private float _coreGlowPeakIntensity = 2.2f;
-    [SerializeField] private float _coreStartScale = 0.75f;
-    [SerializeField] private float _corePeakScale = 1.10f;
-    [SerializeField] private float _coreEndScale = 1f;
+    [SerializeField] private float _corePeakIntensity = 2.0f;
+    [SerializeField] private float _coreGlowPeakIntensity = 0.9f;
+    [SerializeField] private float _coreStartScale = 0.5f;
+    [SerializeField] private float _corePeakScale = 0.8f;
+    [SerializeField] private float _coreEndScale = 0.7f;
 
     [Header("Outer Glow")]
     [SerializeField] private float _outerGlowFadeInEnd = 0.1f;
     [SerializeField] private float _outerGlowFadeOutStart = 0.2f;
-    [SerializeField] private float _outerGlowPeakIntensity = 1.25f;
-    [SerializeField] private float _outerGlowStartScale = 0.85f;
-    [SerializeField] private float _outerGlowEndScale = 1.08f;
+    [SerializeField] private float _outerGlowPeakIntensity = 0.6f;
+    [SerializeField] private float _outerGlowStartScale = 0.6f;
+    [SerializeField] private float _outerGlowEndScale = 0.9f;
 
     [Header("Parry Color")]
     [SerializeField, ColorUsage(true, true)]
@@ -108,6 +115,17 @@ public class WarningSignController : MonoBehaviour
 
         SetVisible(false);
     }
+    private void OnDestroy()
+    {
+        if (_beamMaterial != null)
+            Destroy(_beamMaterial);
+
+        if (_coreMaterial != null)
+            Destroy(_coreMaterial);
+
+        if (_outerGlowMaterial != null)
+            Destroy(_outerGlowMaterial);
+    }
 
     public void Play(Transform target, DefenseWindowType defenseType)
     {
@@ -130,6 +148,7 @@ public class WarningSignController : MonoBehaviour
         UpdateScreenPosition();
         SetVisible(true);
 
+        PlayWarningSignSFX();
         _playCoroutine = StartCoroutine(PlayRoutine());
     }
 
@@ -340,20 +359,29 @@ public class WarningSignController : MonoBehaviour
         if (_camera == null)
             return;
 
-        Vector3 worldPosition =
-            _target.position +
-            Vector3.up * _worldHeightOffset;
+        Vector3 viewportPosition =
+            _camera.WorldToViewportPoint(_target.position);
 
-        Vector3 screenPosition =
-            _camera.WorldToScreenPoint(worldPosition);
-
-        if (screenPosition.z <= 0f)
+        if (viewportPosition.z <= 0f)
         {
             SetVisible(false);
             return;
         }
 
         SetVisible(true);
+
+        viewportPosition.x = Mathf.Clamp(
+            viewportPosition.x,
+            _horizontalViewportMargin,
+            1f - _horizontalViewportMargin);
+
+        viewportPosition.y = Mathf.Clamp(
+            viewportPosition.y,
+            _verticalViewportMargin,
+            1f - _verticalViewportMargin);
+
+        Vector3 screenPosition =
+            _camera.ViewportToScreenPoint(viewportPosition);
 
         // Canvas 좌표 변환
         Camera canvasCamera =
@@ -371,15 +399,11 @@ public class WarningSignController : MonoBehaviour
         }
     }
 
-    private void OnDestroy()
+    public void PlayWarningSignSFX()
     {
-        if (_beamMaterial != null)
-            Destroy(_beamMaterial);
+        if (!isActiveAndEnabled || _warningSignCue == null)
+            return;
 
-        if (_coreMaterial != null)
-            Destroy(_coreMaterial);
-
-        if (_outerGlowMaterial != null)
-            Destroy(_outerGlowMaterial);
+        AudioManager.Instance?.PlayOneShot(_warningSignCue, transform.position);
     }
 }

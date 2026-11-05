@@ -10,6 +10,9 @@ public class MeleeImpactLocator : MonoBehaviour
     [FormerlySerializedAs("_weaponTip")]
     [SerializeField] private Transform _impactTip;
 
+    public Transform ImpactRoot => _impactRoot;
+    public Transform ImpactTip => _impactTip;
+
     // 타격 시점의 공격 부위 위치 저장용 필드
     private Vector3 _previousImpactTipPosition;
     private bool _hasPreviousTipPosition;

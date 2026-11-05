@@ -1,5 +1,4 @@
 using UnityEngine;
-using UnityEngine.Serialization;
 
 /// <summary>
 /// 해당 Hero에 종속된 로컬 VFX 제어 컴포넌트
@@ -12,11 +11,6 @@ public class HeroVFX : MonoBehaviour
 
     [Header("Weapon Trail")]
     [SerializeField] private SwordTrailController _swordTrail;
-
-    [Header("Melee Impact Locator")]
-    [FormerlySerializedAs("_meleeWeaponImpactLocator")]
-    [SerializeField]
-    private MeleeImpactLocator _meleeImpactLocator;
 
     [Header("Parry Impact Anchor")]
     [SerializeField] private Transform _parryImpactAnchor;
@@ -40,46 +34,6 @@ public class HeroVFX : MonoBehaviour
         if (_swordTrail == null) return;
 
         _swordTrail.StopImmediate();
-    }
-
-    public bool TryGetMeleeImpactData(
-        Collider targetCollider,
-        out Vector3 point,
-        out Vector3 direction,
-        out Vector3 surfaceNormal,
-        out Vector3 slashDirection)
-    {
-        point = default;
-        direction = default;
-        surfaceNormal = default;
-        slashDirection = default;
-
-        if (_meleeImpactLocator == null || targetCollider == null)
-        {
-            return false;
-        }
-
-        if (!_meleeImpactLocator.TryGetImpactSurface(
-            targetCollider,
-            out point,
-            out surfaceNormal))
-        {
-            return false;
-        }
-
-
-        direction = _meleeImpactLocator.GetImpactDirection(targetCollider);
-
-        slashDirection = _meleeImpactLocator.GetImpactMotionDirection(surfaceNormal);
-
-        Debug.DrawRay(
-            point,
-            surfaceNormal * 1.0f,
-            Color.green,
-            0.5f
-        );
-
-        return true;
     }
 
     public bool TryGetParryImpactPoint(out Vector3 point)

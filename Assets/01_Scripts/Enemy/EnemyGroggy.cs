@@ -97,24 +97,18 @@ public class EnemyGroggy : MonoBehaviour
     }
 
     /// <summary>
-    /// 외부(Enemy)에서 특정 일격/스킬 피격 시 호출해줄 그로기 연장 메서드
+    /// 그로기 남은 시간과 전체 기준 시간에 연장량을 더함.
+    /// 기존 타이머를 유지하며 UI 비율은 갱신된 두 시간을 기준으로 계산함.
     /// </summary>
     /// <param name="bonusTime">연장하고 싶은 시간(초)</param>
     public void ExtendGroggyTime(float bonusTime)
     {
-        if (!_status.IsGroggy) return; // 그로기 상태가 아니면 연장 불가
+        if (!_status.IsGroggy || bonusTime <= 0f) return;
 
         Debug.Log($"[그로기 연장] 기존 남은 시간: {_currentGroggyTime:F1}초 -> {bonusTime}초 추가");
 
-        // 코루틴을 멈추고 그로기 시간 재계산
-        if (_groggyTimerCoroutine != null) StopCoroutine(_groggyTimerCoroutine);
         _currentGroggyTime += bonusTime;
-
-        // UI - 시간이 늘어났으므로, UI 비율이 1.0f(100%)을 넘지 않도록 최대 기준점도 늘어난 시간으로 조정
-        _currentMaxGroggyDuration = _currentGroggyTime;
-
-        // 새롭게 연장된 시간을 가지고 타이머 코루틴 재시작
-        _groggyTimerCoroutine = StartCoroutine(Co_GroggyTimer());
+        _currentMaxGroggyDuration += bonusTime;
     }
 
     /// <summary>
@@ -135,8 +129,33 @@ public class EnemyGroggy : MonoBehaviour
         ResetGroggy();
     }
 
+    /// <summary>
+    /// 그로기 정보를 초기화하고 정상 종료 이벤트를 전달함.
+    /// </summary>
     public void ResetGroggy()
     {
+        ClearGroggyState(true);
+    }
+
+    /// <summary>
+    /// 사망 시 정상 종료 이벤트 없이 그로기와 타이머를 정리함.
+    /// </summary>
+    public void CancelGroggyOnDeath()
+    {
+        ClearGroggyState(false);
+    }
+
+    /// <summary>
+    /// 진행 중인 타이머와 그로기 정보를 정리하고 필요 시 종료를 알림.
+    /// </summary>
+    private void ClearGroggyState(bool notifyEnd)
+    {
+        if (_groggyTimerCoroutine != null)
+        {
+            StopCoroutine(_groggyTimerCoroutine);
+            _groggyTimerCoroutine = null;
+        }
+
         _status.ResetGroggyGauge();
         _status.SetGroggyState(false);
         _currentGroggyTime = 0f;
@@ -146,8 +165,7 @@ public class EnemyGroggy : MonoBehaviour
         ResetChainAttackCount();
 
         // Enemy에게 이벤트 신호 전달
-        OnGroggyEnd?.Invoke();
-        _groggyTimerCoroutine = null;
+        if (notifyEnd) OnGroggyEnd?.Invoke();
     }
 
     #endregion
@@ -155,20 +173,18 @@ public class EnemyGroggy : MonoBehaviour
 
     #region [Chain Attack Count 영역]
 
-    // Enemey의 최대 ChainAttack 시전 횟수 -> Rank에 맞춰 초기화됨
+    // 그로기 시작 시 적 등급과 생존 파티 인원으로 제한한 QTE 기회 수.
     public int MaxChainAttackCount { get; private set; }
     // Enemy에게 시전된 ChainAttack 시전 횟수
     public int ConsumedChainAttackCount { get; private set; }
     // 현재 Enemy에게 시전 가능한 ChainAttack 횟수
     public int RemaingChainAttackCount =>
-        Mathf.Max(0, MaxChainAttackCount - ConsumedChainAttackCount);
+        Mathf.Max(0, GetPartyLimitedChainAttackCount(MaxChainAttackCount) - ConsumedChainAttackCount);
     public bool CanConsumeChainAttack =>
         _status.IsGroggy && RemaingChainAttackCount > 0;
 
     /// <summary>
-    /// Enemy.Rank 기준 ChainAttack 횟수 초기화
-    /// + 소모된 ChainAttack 횟수 초기화
-    /// 그로기 시작시 호출 (TriggerGroggy)
+    /// 그로기 시작 시 적 등급과 생존 인원에 맞춰 QTE 기회 및 소비 횟수를 초기화함.
     /// </summary>
     private void InitializeChainAttackCount()
     {
@@ -180,7 +196,21 @@ public class EnemyGroggy : MonoBehaviour
             _ => 1
         };
 
+        MaxChainAttackCount = GetPartyLimitedChainAttackCount(MaxChainAttackCount);
         ConsumedChainAttackCount = 0;
+    }
+
+    /// <summary>
+    /// 생존자가 둘 이상일 때만 생존 인원 이내의 QTE 기회 한도를 반환함.
+    /// 잔여 기회 조회에도 사용하여 그로기 도중 파티원 사망을 반영함.
+    /// </summary>
+    private int GetPartyLimitedChainAttackCount(int maxCount)
+    {
+        PartyStateManager partyStateManager = PartyStateManager.Instance;
+        if (partyStateManager == null) return 0;
+
+        int aliveCount = partyStateManager.GetAlivePartyCount();
+        return aliveCount > 1 ? Mathf.Min(maxCount, aliveCount) : 0;
     }
 
     /// <summary>

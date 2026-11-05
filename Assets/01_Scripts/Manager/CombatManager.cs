@@ -4,6 +4,13 @@ public class CombatManager : MonoBehaviour
 {
     public static CombatManager Instance { get; private set; }
 
+    // 실제 피해 적용에 성공한 대상별 알림. Context는 재사용되므로 구독자는 저장·변경하지 않음.
+    public event System.Action<CombatEventContext> OnHitApplied;
+    // 극한회피 판정과 중복 소비 처리가 완료된 Hero 및 공격자를 전달함.
+    public event System.Action<Hero, IAttacker> OnPerfectDodgeSucceeded;
+    // 교대 진입이 아닌 실제 Parry Impact 성공 처리가 끝난 뒤 전달함.
+    public event System.Action<Hero, IAttacker> OnParryAssistSucceeded;
+
     // 현재 플레이어를 공격 중이거나, 패링 타이밍을 제공하고 있는 적의 참조
     // 이녀석이 패링 전의 ParryTarget의 역할을 해주고
     // 이걸 참조해서 Hero-LastAttacker에 담아 사용
@@ -14,6 +21,9 @@ public class CombatManager : MonoBehaviour
     // 극한 회피와 패링 지원이 한 모션에 여러번 재생되지 않기위한 플래그
     private bool _isPerfectDodgeConsumed = false;
     private bool _isParryAssistConsumed = false;
+    // 수락된 패링은 다른 Enemy의 방어 윈도우 갱신과 독립적으로 유지함.
+    private Hero _pendingParryHero;
+    private Enemy _pendingParryAttacker;
 
     [SerializeField]
     private float _heroHitStopDuration = 0.06f;     // Hero 타격 역경직 시간
@@ -91,19 +101,29 @@ public class CombatManager : MonoBehaviour
         // 최종 HitInfo 패키지 조립
         HitInfo finalHitInfo = new HitInfo
         {
+            attacker = context.Attacker,
+
             damage = damageResult.finalDamage,
             isCrit = damageResult.isCrit,
             dazeAmount = finalDaze,
+
             hitType = context.HitType,
-            attacker = context.Attacker,
+            reactionDirection = context.ReactionDirection,
+            hasReactionDirection = context.HasReactionDirection,
+
             canExtendGroggy = context.CanExtendGroggy,
             groggyExtendTime = context.GroggyExtendTime,
+
             payBackEnergy = context.PayBackEnergy,
             payBackDecibel = context.PayBackDecibel
         };
 
         // 타격 대상이 Destroy 될수도 있으니, 그전에 데미지 텍스트 위치 캐싱
-        Vector3 damageTextPosition = GetDamageTextSpawnPosition(context.Target);
+        Vector3 damageTextAnchorPosition = context.Target.DamageTextAnchor.position;
+        // 피해 적용 과정에서 대상이 제거되어도 재생 위치를 유지함.
+        Vector3 hitImpactSFXPosition = context.HasImpactData
+            ? context.ImpactPoint
+            : damageTextAnchorPosition;
 
         // 피격자에게 TakeDamage 호출하도록 명령
         bool wasDamageApplied = context.Target.TakeDamage(finalHitInfo);
@@ -114,19 +134,33 @@ public class CombatManager : MonoBehaviour
         // 텍스트·역경직·전투 자원·ChainAttack 모두 발생시키지 않음
         if (!wasDamageApplied) return false;
 
+        PlayHitImpactSFX(context, hitImpactSFXPosition);
+
         // 타격 성공 VFX 처리
         if (context.HasImpactData)
         {
+            // 공격자 HitImpact
             VFXManager.Instance?.PlayHitImpact(
-               context.Attacker,
-               context.ImpactPoint,
-               context.ImpactDirection
+                context.Attacker,
+                context.ImpactPoint,
+                context.ImpactDirection
             );
 
+            // 공격자 Hero - HitSpark
             if (context.Attacker is Hero)
             {
                 ParticleVFXManager.Instance?.PlayHitSpark(
                     context.Attacker,
+                    context.ImpactPoint,
+                    context.ImpactDirection
+                );
+            }
+
+            // 피격자 Enemy - HitReactionVFX
+            if (context.Target is Enemy hitReactionEnemy)
+            {
+                ParticleVFXManager.Instance?.PlayHitReactionVFX(
+                    hitReactionEnemy,
                     context.ImpactPoint,
                     context.ImpactDirection
                 );
@@ -144,25 +178,37 @@ public class CombatManager : MonoBehaviour
                 context.HitMarkData,
                 hitMarkEnemy.transform,
                 context.ImpactPoint,
+                context.ImpactDirection,
                 context.SurfaceNormal,
                 context.SlashDirection
             );
         }
+
+        // Camera Shake 연출 실행
+        // -> HeroHitChecker 로 호출 위치 변경
+        // Motion & Hit 로 구성되있는 데이터 구조상
+        // 모션당 한번의 CameraShake 발동을 위해서는 이전
+
 
         // Chain Attack 발동 검사
         TryOpenChainAttack(context);
 
         // 데미지 텍스트 출력
         DamageTextManager.Instance?.PopDamageText(
-            damageTextPosition,
+            damageTextAnchorPosition,
             Mathf.RoundToInt(finalHitInfo.damage),
             finalHitInfo.isCrit
         );
 
-        // Hero 타격 역경직 처리
+        // Hero 근접 공격에 역경직 발생
+        // 투사체 공격에는 발사 시점에 역경직
+        // 설치형 공격에는 역경직 발생 X
         if (context.Attacker is Hero hero)
         {
-            hero.Animation.TriggerHitStop(_heroHitStopDuration);
+            if (context.HitDetectionType == HitDetectionType.MeleeOverlap)
+            {
+                TriggerHeroHitStop(hero);
+            }
         }
         // Enemy 타격 역경직 처리
         else if (context.Attacker is Enemy enemy)
@@ -173,7 +219,18 @@ public class CombatManager : MonoBehaviour
         // 피격자 경직은 Target.TakeDamage 내부에서 처리
         // -> Hero / Enemy 각자 책임지게 변경
 
+        OnHitApplied?.Invoke(context);
         return true;
+    }
+
+    /// <summary>
+    /// 근접·영역 적중 또는 투사체 발사 시 공통 설정 시간으로 Hero 역경직을 요청한다.
+    /// </summary>
+    public void TriggerHeroHitStop(Hero hero)
+    {
+        if (hero == null) return;
+
+        hero.Animation.TriggerHitStop(_heroHitStopDuration);
     }
 
     /// <summary>
@@ -220,14 +277,37 @@ public class CombatManager : MonoBehaviour
     }
 
     /// <summary>
-    /// 공격자의 공격이 성공할 시, 공격자의 전투 자원이 차오르게 명령하는 메서드
+    /// 한 번의 타격 판정에서 한 대상 이상에게 피해 적용이 성공하면 자원을 반환함.
+    /// 대상별 ProcessHit 처리가 끝난 뒤 판정 실행자가 한 번 호출하며,
+    /// Hero의 OnAttackHitConfirmed를 통해 캐릭터 전용 기믹에 성공을 알림.
     /// </summary>
     public void PayBackCombatResource(CombatEventContext context)
     {
-        context.Attacker.OnHitSuccess(
-            context.PayBackEnergy,
-            context.PayBackDecibel
-        );
+        if (context.Attacker is Hero hero)
+        {
+            hero.OnHitSuccess(context.PayBackEnergy, context.PayBackDecibel);
+            hero.NotifyAttackHitConfirmed(context.AttackType);
+        }
+        else if (context.Attacker is Enemy enemy)
+        {
+            enemy.OnHitSuccess(context.PayBackEnergy, context.PayBackDecibel);
+        }
+    }
+
+    /// <summary>
+    /// 동일 타격에서 최초로 수락되는 적중음 요청 한 번만 재생함.
+    /// </summary>
+    private void PlayHitImpactSFX(CombatEventContext context, Vector3 position)
+    {
+        if (context.HitImpactSFX == null || context.HasPlayedHitImpactSFX)
+            return;
+
+        AudioManager manager = AudioManager.Instance;
+        if (manager == null) return;
+
+        bool wasPlaybackRequested = manager.PlayOneShot(context.HitImpactSFX, position);
+        if (wasPlaybackRequested)
+            context.MarkHitImpactSFXPlayed();
     }
 
     #endregion
@@ -235,18 +315,24 @@ public class CombatManager : MonoBehaviour
 
     #region [극한회피 / 패링지원 관리 영역]
 
-    // TODO : 추후 Dictionary 활용하는 식으로 변경 예정
-    // CombatManagerExam 스크립트 참고
-
     /// <summary>
-    /// 공격에 대응했는지 반환 (극한회피/패링지원)
+    /// 공격에 대응했는지 반환함 (자동회피/극한회피/패링지원).
     /// </summary>
     private bool TryResolveDefense(CombatEventContext context)
     {
         // 타격대상이 Hero인지 체크
         if (context.Target is not Hero targetHero) return false;
-        // Hero 무적여부 체크
-        if (!targetHero.ActionRegistry.IsInvincible) return false;
+
+        // 사망 및 잔상 상태에서는 방어 기믹을 실행하지 않고 피격을 차단함.
+        if (targetHero.Status.IsDead || targetHero.ActionRegistry.IsOffFieldActionActive) return true;
+
+        // 무적 상태체크 이전에 자동회피 기믹 우선 작동
+        if (targetHero.Mechanic?.TryEvadeHit(context) == true) return true;
+
+        // 회피·패링 성공은 액션 무적 구간에서만 처리함.
+        // CombatSandBox 무적만 활성화된 경우 피해만 차단함.
+        if (!targetHero.ActionRegistry.IsActionInvincible)
+            return targetHero.ActionRegistry.IsInvincibilityActive;
 
         // HeroState에 따른 Swtich-Case
         switch (targetHero.CurrentState)
@@ -272,17 +358,23 @@ public class CombatManager : MonoBehaviour
     CombatEventContext context)
     {
         if (hero.CurrentState != HeroState.ParryIn) return false;
-        if (!IsParryAssistWindowOpen) return false;
-        if (CurrentDefenseWindowAttacker != context.Attacker) return false;
-        if (!_isParryAssistConsumed) return false;
+        if (_pendingParryHero != hero || _pendingParryAttacker == null) return false;
+        if (_pendingParryAttacker != (Enemy)context.Attacker) return false;
+        if (!IsValidEnemyTarget(_pendingParryAttacker)) return false;
+        if (!hero.TryResolveParryImpact(_pendingParryAttacker)) return false;
 
+        CancelParryAssistRequest(hero);
         ResolveParryAssistSuccess(hero, context);
         return true;
     }
 
-    public bool TryConsumeParryAssistRequest(out Enemy parryTarget)
+    /// <summary>
+    /// 교대할 Hero와 해당 공격자를 묶어 패링 요청을 한 번 수락함.
+    /// </summary>
+    public bool TryConsumeParryAssistRequest(Hero incomingHero, out Enemy parryTarget)
     {
         parryTarget = null;
+        if (incomingHero == null || incomingHero.Status.IsDead) return false;
 
         if (!IsParryAssistWindowOpen) return false;
         if (_isParryAssistConsumed) return false;
@@ -291,9 +383,22 @@ public class CombatManager : MonoBehaviour
         if (!IsValidEnemyTarget(activeEnemy)) return false;
 
         _isParryAssistConsumed = true;
+        // 연속 패링 교대가 실제 수락된 경우에만 이전 요청을 교체함.
+        _pendingParryHero = incomingHero;
+        _pendingParryAttacker = activeEnemy;
         parryTarget = activeEnemy;
 
         return true;
+    }
+
+    /// <summary>
+    /// 지정 Hero가 소유한 미완료 패링 요청만 해제함.
+    /// </summary>
+    public void CancelParryAssistRequest(Hero hero)
+    {
+        if (_pendingParryHero != hero) return;
+        _pendingParryHero = null;
+        _pendingParryAttacker = null;
     }
 
     /// <summary>
@@ -307,7 +412,8 @@ public class CombatManager : MonoBehaviour
 
         Debug.Log($"[패링지원 성공] {hero.name}");
 
-        IsParryAssistWindowOpen = false;
+        if (CurrentDefenseWindowAttacker == attacker)
+            IsParryAssistWindowOpen = false;
 
         // ParryImpactSpark 발동지점
         if (context.HasImpactData)
@@ -331,10 +437,11 @@ public class CombatManager : MonoBehaviour
         if (attacker is Enemy enemy)
         {
             hero.SetCounterTarget(enemy);
-            hero.ResolveParryImpact(enemy);
             ApplyParryAssistResult(hero, enemy);
             CombatPresentationManager.Instance?.PlayParryImpact();
+            //CombatPresentationManager.Instance?.TryStopParryCamera(hero);
         }
+        OnParryAssistSucceeded?.Invoke(hero, attacker);
     }
 
     /// <summary>
@@ -360,6 +467,7 @@ public class CombatManager : MonoBehaviour
 
         // Hero.ActionRegistry 회피 반격 가능 처리
         hero.ActionRegistry.SetCanPerfectDodgeCounter(true);
+        OnPerfectDodgeSucceeded?.Invoke(hero, attacker);
     }
 
     /// <summary>
@@ -373,6 +481,8 @@ public class CombatManager : MonoBehaviour
             return;
         }
 
+        // 같은 적의 다음 공격 기회에 이전 요청을 재사용하지 않음.
+        if (_pendingParryAttacker == attacker) CancelParryAssistRequest(_pendingParryHero);
         CurrentDefenseWindowAttacker = attacker;
 
         IsParryAssistWindowOpen = canParry;
@@ -389,6 +499,9 @@ public class CombatManager : MonoBehaviour
     /// </summary>
     public void CloseDefenseWindow(IAttacker attacker)
     {
+        // 최신 윈도우와 무관하게 해당 적의 미완료 요청을 종료함.
+        if (_pendingParryAttacker != null && _pendingParryAttacker == (Enemy)attacker)
+            CancelParryAssistRequest(_pendingParryHero);
         if (CurrentDefenseWindowAttacker != attacker)
         {
             return;
@@ -487,6 +600,13 @@ public class CombatManager : MonoBehaviour
         if (enemy.Status.IsDead) return;
         if (!enemy.Status.IsGroggy) return;
 
+        // 궁극기 연출 중 지연 타격으로 Chain QTE가 개방되는 것을 차단함.
+        if (CombatPresentationManager.Instance != null &&
+            CombatPresentationManager.Instance.IsUltPresentationActive)
+        {
+            return;
+        }
+
         ChainAttackManager chainAttackManager = ChainAttackManager.Instance;
 
         if (chainAttackManager == null)
@@ -519,27 +639,4 @@ public class CombatManager : MonoBehaviour
 
     #endregion
 
-
-    #region [데미지 텍스트 position 캐싱 메서드]
-    private Vector3 GetDamageTextSpawnPosition(IDamageable target)
-    {
-        if (target is not Component targetComponent)
-            return Vector3.zero;
-
-        Transform targetTransform = targetComponent.transform;
-        Vector3 spawnPosition = targetTransform.position + Vector3.up * 1.5f;
-
-        Camera mainCamera = Camera.main;
-        if (mainCamera == null) return spawnPosition;
-
-        Vector3 directionToCamera = (mainCamera.transform.position - targetTransform.position).normalized;
-
-        spawnPosition += directionToCamera * 0.7f;
-        spawnPosition +=
-            mainCamera.transform.right * Random.Range(-0.2f, 0.2f) +
-            Vector3.up * Random.Range(-0.1f, 0.1f);
-
-        return spawnPosition;
-    }
-    #endregion
 }

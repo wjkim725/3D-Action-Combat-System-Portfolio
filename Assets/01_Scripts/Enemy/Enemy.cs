@@ -4,9 +4,7 @@ using UnityEngine;
 
 public class Enemy : MonoBehaviour, IDamageable, IAttacker
 {
-    // Enemy 사망 이벤트 선언
     public event System.Action<Enemy> OnDied;
-
 
     public EnemyStatus Status { get; private set; }
     public EnemyGroggy Groggy { get; private set; }
@@ -18,13 +16,18 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
     public EnemyAI AI { get; private set; }
     public EnemyActionRegistry ActionRegistry { get; private set; }
     public EnemyVFX VFX { get; private set; }
+    public EnemyHitReaction HitReaction { get; private set; }
+    public EnemyAudio Audio { get; private set; }
     
 
     // IDamageable
     IStatus IDamageable.Status => Status;
+    public Transform DamageTextAnchor =>
+        _camPivot != null ? _camPivot : transform;
     // IAttacker
     IStatus IAttacker.Status => Status;
     public Transform AttackerTransform => this.transform;
+
 
     public EnemyRank Rank = EnemyRank.Elite;
 
@@ -36,6 +39,11 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
     public bool IsAIControlSuspended => _isAIControlSuspended;
     public EnemyAttackPattern CurrentAttackPattern => _currentAttackPattern;
     public List<EnemyPatternDataSO> PatternDataList => _patternDataList;
+
+    [Header("AI Behavior")]
+    [SerializeField] private EnemyAIMode _aiMode = EnemyAIMode.Normal;
+
+    public EnemyAIMode AIMode => _aiMode;
 
     // 패턴 데이터 에셋 : 패턴들을 리스트로 관리
     [SerializeField]
@@ -54,7 +62,12 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
     // Enemy HUD 연결 필요
     [SerializeField] private GameObject _enemyHUD;
 
-    
+    // Camera Pivot
+    [SerializeField] private Transform _camPivot;
+    public Transform CamPivot =>
+        _camPivot != null ? _camPivot : transform;
+
+
 
     private void Awake()
     {
@@ -69,6 +82,16 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         AI = GetComponent<EnemyAI>();
         ActionRegistry = GetComponent<EnemyActionRegistry>();
         VFX = GetComponent<EnemyVFX>();
+        HitReaction = GetComponent<EnemyHitReaction>();
+        Audio = GetComponent<EnemyAudio>();
+
+        if (_camPivot == null)
+        {
+            Debug.LogError(
+                $"{name}: Enemy의 CamPivot이 할당되지 않았습니다.",
+                this
+            );
+        }
     }
 
     private void Start()
@@ -89,7 +112,7 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         // 공격 중일 때 뇌는 정지하지만, 몸은 플레이어를 계속 주시/회전해야 하므로 육체 전용 Update만 처리
         if (CurrentState == EnemyState.Attack && _heroTransform != null)
         {
-            Movement.RotateToTarget(_heroTransform.position);
+            Movement.RotateToTargetDuringAttack(_heroTransform.position);
         }
     }
 
@@ -109,6 +132,7 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
 
     private void OnDisable()
     {
+        CombatManager.Instance?.CloseDefenseWindow(this);
         if (Groggy != null)
         {
             Groggy.OnGroggyStart -= HandleGroggyStart;
@@ -117,6 +141,9 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
     }
 
 
+    /// <summary>
+    /// 새 상태에 필요한 이동, 애니메이션과 생명주기 처리를 수행함.
+    /// </summary>
     private void EnterState(EnemyState newState)
     {
         _currentState = newState;
@@ -124,9 +151,16 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         switch (CurrentState)
         {
             case EnemyState.Idle:
-                _isAIControlSuspended = false;   
+                _isAIControlSuspended = false;
                 Animation.SetIsIdle(true);
-                Movement.StopMoving(); // 대기 시 정지
+                Movement.StopMovingImmediate(); // 대기 시 정지
+                break;
+            case EnemyState.CombatIdle:
+                _isAIControlSuspended = true;
+                Movement.StopMovingImmediate();
+                HitReaction.ActivateSuperArmor(HitReactionResistanceLevel.Light);
+                Animation.TriggerCombatIdle();
+
                 break;
             case EnemyState.Chase:
                 if (_heroTransform != null)
@@ -137,36 +171,56 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
             case EnemyState.Orbit:
                 if (_heroTransform != null)
                 {
-                    Movement.StartOrbiting(_heroTransform);
+                    Movement.StartOrbitingProcess(_heroTransform);
                 }
                 break;
             case EnemyState.Attack:
-                Movement.StopMoving(); // 공격 시작 시 관성 제거 및 정지
-                if (_currentAttackPattern != null)
+                // 방향 이동은 마지막 자세를 유지한 채 공격으로 블렌딩함.
+                Movement.StopMovingImmediate(
+                    resetMovementAnimation: !Animation.UsesDirectionalMovement);
+                Movement.BeginAttackRotationTracking(); // Hero 추적용 회전 허용
+
+                if (_currentAttackPattern != null && _currentAttackPattern.Data != null)
                 {
+                    HitReaction.ActivateSuperArmor(_currentAttackPattern.Data.superArmorLevel);
+
                     Animation.TriggerAttack(_currentAttackPattern.Data.animationTriggerName);
+                }
+                else
+                {
+                    /*
+                     * 유효한 패턴 데이터가 없다면
+                     * 이전 슈퍼아머가 남지 않도록 초기화
+                     */
+                    HitReaction.DeactivateSuperArmor();
                 }
                 break;
             case EnemyState.Hit:
                 _isAIControlSuspended = true;
-                Movement.StopMoving();
-                //Animation.PlayHitReaction(_currentHitType);
+                Movement.StopMovingImmediate();
                 break;
             case EnemyState.Groggy:
                 _isAIControlSuspended = true;
-                Movement.StopMoving();
+                Movement.StopMovingImmediate();
                 Animation.SetIsGroggy(true);
+
+                // 현재 별도의 GroggySFX가 없으니 피격음으로 대체
+                Audio?.PlayHit();
 
                 Debug.Log($"[Groggy 진입] AI Suspended = {_isAIControlSuspended}");
 
                 //ResetAttackSequence(); // 피격/그로기 시 진행 중인 공격 대장부 초기화
                 break;
             case EnemyState.Dead:
+                _isAIControlSuspended = true;
+                Movement.StopMovingImmediate();
+                Groggy?.CancelGroggyOnDeath();
+
+                // 현재 별도의 DeadSFX가 없으니 피격음으로 대체
+                Audio?.PlayHit();
+
                 OnDied?.Invoke(this);
 
-                _isAIControlSuspended = true;
-                Movement.StopMoving();
-                
                 // 사망시 HUD 비활성화
                 if (_enemyHUD != null)
                 {
@@ -180,29 +234,52 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         }
     }
 
-    private void ExitState(EnemyState currentState)
+    /// <summary>
+    /// 이전 상태를 정리하고 공격 상태 종료 시 개별·전역 쿨타임을 시작함.
+    /// </summary>
+    private void ExitState(EnemyState currentState, EnemyState nextState)
     {
         switch (CurrentState)
         {
             case EnemyState.Idle:
                 Animation.SetIsIdle(false);
                 break;
+            case EnemyState.CombatIdle:
+                HitReaction.DeactivateSuperArmor();
+                Animation.ResetTriggerCombatIdle();
+                break;
             case EnemyState.Chase:
             case EnemyState.Orbit:
-                Movement.StopMoving();
+                Movement.StopMovingImmediate(
+                    resetMovementAnimation:
+                        nextState != EnemyState.Attack ||
+                        !Animation.UsesDirectionalMovement);
                 break;
             case EnemyState.Attack:
+                /*
+                 * 정상 종료, 피격, Groggy, 사망 등
+                 * 어떤 이유로 Attack 상태를 벗어나더라도
+                 * 활성 슈퍼아머를 먼저 해제
+                 */
+                HitReaction.DeactivateSuperArmor();
+
+                Movement.StopAttackRotationTracking();
+
                 if (CombatManager.Instance != null)
                 {
                     CombatManager.Instance.CloseDefenseWindow((IAttacker)this);
                 }
 
-                if (_currentAttackPattern != null)
+                if (_currentAttackPattern != null && _currentAttackPattern.Data != null)
                 {
                     Animation.ResetTriggerAttack(_currentAttackPattern.Data.animationTriggerName);
                 }
+
+                Pattern.MarkPatternEnded(_currentAttackPattern);
                 break;
             case EnemyState.Hit:
+                Animation.ResetTriggerHit();
+                HitReaction.OnExitReactionState();
                 break;
             case EnemyState.Groggy:
                 _isAIControlSuspended = false;
@@ -215,9 +292,24 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         }
     }
 
+    /// <summary>
+    /// 사망 및 그로기 전환 제한을 확인한 뒤 상태를 변경함.
+    /// </summary>
     public void ChangeState(EnemyState newState)
     {
         if (CurrentState == newState) return;
+
+        if (_aiMode != EnemyAIMode.Normal &&
+            (newState == EnemyState.Attack || newState == EnemyState.CombatIdle)) return;
+
+        if (_aiMode == EnemyAIMode.Stationary &&
+            (newState == EnemyState.Chase || newState == EnemyState.Orbit)) return;
+
+        if ((Status.IsDead || CurrentState == EnemyState.Dead) &&
+            newState != EnemyState.Dead)
+        {
+            return;
+        }
 
         // Groggy 중에는 Dead 외의 상태 전환 차단
         if (Status.IsGroggy &&
@@ -227,18 +319,36 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
             return;
         }
 
-        ExitState(CurrentState);
+        ExitState(CurrentState, newState);
         EnterState(newState);
         Debug.Log($"{gameObject.name} 상태 변경 : {newState}");
     }
 
 
+    // CombatIdle 탈출하고 Idle 로 전환
+    // CombatIdle 애니메이션 종료 이벤트 핸들러에 배치
+    public void CompleteCombatIdle()
+    {
+        if (CurrentState != EnemyState.CombatIdle) return;
 
+        Debug.Log("CompleteCombatIdle");
 
+        ChangeState(EnemyState.Idle);
 
+        Debug.Log(
+        $"[CombatIdle 종료] " +
+        $"State: {CurrentState}, " +
+        $"AI Suspended: {_isAIControlSuspended}"
+    );
+    }
+
+    /// <summary>
+    /// 실행할 패턴을 저장하고 AI 행동 실행을 중단한 뒤 공격 상태로 전환함.
+    /// </summary>
     public void ExecuteAttack(EnemyAttackPattern pattern)
     {
-        if (CurrentState == EnemyState.Attack ||
+        if (_aiMode != EnemyAIMode.Normal ||
+            CurrentState == EnemyState.Attack ||
             Status.IsGroggy ||
             Status.IsDead)
         {
@@ -250,12 +360,39 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
 
         _currentAttackPattern = pattern;
 
-        Pattern.MarkPatternExecuted(pattern);
-
         _isAIControlSuspended = true;
 
         ChangeState(EnemyState.Attack);
     }
+
+    #region [AI 행동 모드]
+
+    /// <summary>
+    /// 행동 모드를 변경하고 기존 자율 이동과 공격을 정리함.
+    /// 피격, 그로기와 사망 상태는 중단하지 않으며 비활성 소환체에도 설정할 수 있음.
+    /// </summary>
+    public void SetAIMode(EnemyAIMode mode)
+    {
+        if (_aiMode == mode) return;
+        _aiMode = mode;
+
+        // 비활성 프리팹은 Awake 이전에 모드만 지정할 수 있음.
+        if (Status == null) return;
+
+        if (CurrentState != EnemyState.Hit &&
+            CurrentState != EnemyState.Groggy &&
+            CurrentState != EnemyState.Dead && !Status.IsDead)
+        {
+            ChangeState(EnemyState.Idle);
+        }
+
+        Movement.StopMovingImmediate();
+        Movement.CompleteOrbiting();
+        ActionRegistry.ResetPatternSequence();
+        AI.ResetBehavior();
+    }
+
+    #endregion
 
     // Idamageable 인터페이스 메서드 구현
     public bool TakeDamage(HitInfo hitInfo)
@@ -287,41 +424,19 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         if (Groggy != null)
         {
             Groggy.GroggyLogic(hitInfo);
-            HandleHitReaction(hitInfo);
+        }
+
+        // 일반 피격 반응 처리
+        // 메서드 내부 규칙으로 그로기 상태에서는 피격반응 X
+        if (HitReaction != null)
+        {
+            HitReaction.TryStartReaction(hitInfo);
         }
 
         return true;
     }
 
-    // 타격당할 때 경직도 처리 메서드
-    private void HandleHitReaction(HitInfo hitInfo)
-    {
-        if (Status.IsGroggy || Status.IsDead) return;
-
-        switch (hitInfo.hitType)
-        {
-            case HitType.None:
-                Debug.Log("경직 없음");
-                break;
-            case HitType.Light:
-                Debug.Log("약경직 발동");
-                break;
-            case HitType.Heavy:
-                Debug.Log("강경직 발동");
-                break;
-            case HitType.Knockback:
-                Debug.Log("넉백 발동");
-                break;
-            case HitType.Parry:
-                Debug.Log("패링 발동");
-                break;
-            default:
-                break;
-        }
-    }
-
-
-
+    
     /// <summary>
     /// EnemyStatus는 HP와 사망 여부만 관리하고,
     /// 사망에 따른 상태 전환과 오브젝트 생명주기는
@@ -351,8 +466,13 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         ChangeState(EnemyState.Groggy);
     }
 
+    /// <summary>
+    /// 살아 있는 적의 정상 그로기 종료 시 대기 상태로 복귀함.
+    /// </summary>
     private void HandleGroggyEnd()
     {
+        if (Status.IsDead || CurrentState != EnemyState.Groggy) return;
+
         ChangeState(EnemyState.Idle);
     }
 

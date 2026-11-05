@@ -6,9 +6,14 @@ public class EnemyVFX : MonoBehaviour
     [Header("Hit Impact VFX Data")]
     [SerializeField]
     private HitImpactVFXDataSO _hitImpactData;
-
     public HitImpactVFXDataSO HitImpactData =>
         _hitImpactData;
+
+    [Header("Hit Reaction VFX")]
+    [SerializeField]
+    private ParticleVFXController _hitReactionVFXPrefab;
+    public ParticleVFXController HitReactionVFXPrefab =>
+        _hitReactionVFXPrefab;
 
     [Header("Melee Impact Locator")]
     [SerializeField]
@@ -122,5 +127,18 @@ public class EnemyVFX : MonoBehaviour
         markDirection.Normalize();
 
         return true;
+    }
+
+    // VFX Manager에서 호출할 WarningSign 재생 위치 반환 메서드
+    public Transform GetWarningSignTarget()
+    {
+        if (_meleeImpactLocator != null)
+        {
+            return _meleeImpactLocator.transform;
+        }
+        else
+        {
+            return this.transform;
+        }
     }
 }

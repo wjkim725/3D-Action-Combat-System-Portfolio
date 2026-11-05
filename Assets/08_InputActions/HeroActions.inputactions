@@ -374,6 +374,34 @@
                     "isPartOfComposite": false
                 }
             ]
+        },
+        {
+            "name": "System",
+            "id": "17acacfa-fa9c-4944-81c0-90b36eb5d009",
+            "actions": [
+                {
+                    "name": "ToggleSettings",
+                    "type": "Button",
+                    "id": "73f6c949-341c-4915-9a93-8b7f3338b198",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "",
+                    "id": "e5dc7f51-1023-48c0-b998-7993ebb6d720",
+                    "path": "<Keyboard>/escape",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": ";PC",
+                    "action": "ToggleSettings",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                }
+            ]
         }
     ],
     "controlSchemes": [

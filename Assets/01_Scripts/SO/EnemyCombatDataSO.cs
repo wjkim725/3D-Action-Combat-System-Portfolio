@@ -27,9 +27,13 @@ public class EnemyCombatDataSO : ScriptableObject
         [Header("Hit Reaction")]
         public HitType hitType;
 
-        [Header("Environment Hit Mark")]
+        [Header("Environment Hit Mark VFX")]
         [Tooltip("지면에 HitMark를 남기지 않는 타격은 비워둡니다.")]
         public HitMarkDataSO environmentHitMarkData;
+
+        [Header("Hit Impact SFX")]
+        [Tooltip("대상에게 실제 피해 적용이 성공했을 때 재생할 효과음. 미할당 시 재생하지 않음")]
+        public AudioCueSO hitImpactSFX;
     }
 
     /// <summary>
@@ -43,7 +47,9 @@ public class EnemyCombatDataSO : ScriptableObject
 
         [Header("Perfect Assist")]
         [Tooltip("해당 모션이 패링 지원 판정을 허용하는지")]
-        public bool isParryable;
+        // 이거 안쓰고 애니메이션 이벤트
+        // OnDefenseWindow 파라미터 기반으로 구현중..
+        public bool isParryable;            
 
         [Header("Physics & Range")]
         public float hitRadius;

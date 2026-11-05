@@ -10,6 +10,10 @@ public class HeroAnimation : MonoBehaviour
     [Header("Layer Settings")]
     [SerializeField] private int _upperBodyLayerIndex = 1;
 
+    [Header("Weapon Transition Settings")]
+    [SerializeField] private bool _useWeaponTransitionAnimation = true;
+    public bool UseWeaponTransitionAnimation => _useWeaponTransitionAnimation;
+
     [Header("Idle Settings")]
     [SerializeField] private int _idleAniCount = 3; // 기본(0), 랜덤1(1), 랜덤2(2)
     [SerializeField] private float _waitTimeForRandomIdle = 10f;
@@ -24,6 +28,13 @@ public class HeroAnimation : MonoBehaviour
     private int _randomIdleIndex;
 
     // --- 애니메이션 파라미터 해시 캐싱 (성능 최적화) ---
+    private static readonly int HashEntryState = Animator.StringToHash("Base Layer.Entry");
+    private static readonly int HashIdleBlendState = Animator.StringToHash("Base Layer.Idle_blend");
+    private static readonly int HashDrawWeaponState = Animator.StringToHash("UpperBody.Draw_Sequence.Draw_Weapon");
+    private static readonly int HashDisarmWeaponState = Animator.StringToHash("UpperBody.Disarm_Sequence.Disarm_Weapon");
+    private static readonly int HashParryPrepareState = Animator.StringToHash("Base Layer.Parry.Parry_Prepare");
+    private static readonly int HashParryImpactState = Animator.StringToHash("Base Layer.Parry.Parry_Impact");
+
     private static readonly int HashIdleIndex = Animator.StringToHash("IdleIndex");
     private static readonly int HashIsIdle = Animator.StringToHash("IsIdle");
     private static readonly int HashIsCombat = Animator.StringToHash("IsCombat");
@@ -31,7 +42,9 @@ public class HeroAnimation : MonoBehaviour
     private static readonly int HashHorizontal = Animator.StringToHash("Horizontal");
     private static readonly int HashVertical = Animator.StringToHash("Vertical");
     private static readonly int HashComboIndex = Animator.StringToHash("ComboIndex");
-    private static readonly int HashIsCharging = Animator.StringToHash("IsCharging");
+    private static readonly int HashIsAttackCharging = Animator.StringToHash("IsAttackCharging");
+    private static readonly int HashIsSkillCharging = Animator.StringToHash("IsSkillCharging");
+    private static readonly int HashChargeAttackTrigger = Animator.StringToHash("ChargeAttackTrigger");
     private static readonly int HashIsDashAttack = Animator.StringToHash("IsDashAttack");
     private static readonly int HashIsComboReserved = Animator.StringToHash("IsComboReserved");
     private static readonly int HashIsParryCounterReserved = Animator.StringToHash("IsParryCounterReserved");
@@ -45,8 +58,6 @@ public class HeroAnimation : MonoBehaviour
     private static readonly int HashExSkillTrigger = Animator.StringToHash("ExSkillTrigger");
     private static readonly int HashSwapInTrigger = Animator.StringToHash("SwapInTrigger");
     private static readonly int HashSwapOutTrigger = Animator.StringToHash("SwapOutTrigger");
-    private static readonly int HashParryTrigger = Animator.StringToHash("ParryTrigger");
-    private static readonly int HashParryImpactTrigger = Animator.StringToHash("ParryImpactTrigger");
     private static readonly int HashParryCounterTrigger = Animator.StringToHash("ParryCounterTrigger");
     private static readonly int HashDodgeCounterTrigger = Animator.StringToHash("DodgeCounterTrigger");
     private static readonly int HashDeathTrigger = Animator.StringToHash("DeathTrigger");
@@ -58,7 +69,7 @@ public class HeroAnimation : MonoBehaviour
     private Coroutine _hitStopCoroutine;
 
     // 외부 공개용 프로퍼티
-    public bool IsCharging => Animator.GetBool("IsCharging");
+    public bool IsAttackCharging => Animator.GetBool("IsAttackCharging");
     public bool IsDashAttack => Animator.GetBool("IsDashAttack");
 
     private void Awake()
@@ -78,7 +89,7 @@ public class HeroAnimation : MonoBehaviour
             _idleTimer += Time.deltaTime;
         }
 
-        // 1. 지정된 대기 시간을 넘기면 랜덤 애니메이션 선정
+        // 지정된 대기 시간을 넘기면 랜덤 애니메이션 선정
         if (_idleTimer >= _waitTimeForRandomIdle && !_isPlayingRandomIdle)
         {
             _randomIdleIndex = Random.Range(1, _idleAniCount);
@@ -87,9 +98,10 @@ public class HeroAnimation : MonoBehaviour
 
             Debug.Log($"{_randomIdleIndex}번 Idle 애니메이션 재생");
             Animator.SetFloat(HashIdleIndex, _randomIdleIndex);
+            Animator.Play(HashIdleBlendState, 0, 0f);
         }
 
-        // 2. 랜덤 애니메이션이 재생 중일 때 시간 체크 및 탈출 판정
+        // 랜덤 애니메이션이 재생 중일 때 시간 체크 및 탈출 판정
         if (_isPlayingRandomIdle)
         {
             _randomIdleTimer += Time.deltaTime;
@@ -182,9 +194,35 @@ public class HeroAnimation : MonoBehaviour
         Animator.SetInteger(HashComboIndex, comboIndex);
     }
 
-    public void SetIsCharging(bool isCharging)
+    /// <summary>평꾹 모션의 입력 유지 신호를 설정한다.</summary>
+    public void SetIsAttackCharging(bool isCharging)
     {
-        Animator.SetBool(HashIsCharging, isCharging);
+        Animator.SetBool(HashIsAttackCharging, isCharging);
+    }
+
+    /// <summary>일반 스킬의 차징 신호를 설정한다.</summary>
+    public void SetIsSkillCharging(bool isCharging)
+    {
+        Animator.SetBool(HashIsSkillCharging, isCharging);
+    }
+
+    /// <summary>중단 또는 종료 시 모든 차징 신호를 해제한다.</summary>
+    public void ClearChargingParameters()
+    {
+        SetIsAttackCharging(false);
+        SetIsSkillCharging(false);
+    }
+
+    /// <summary>독립 평꾹 서브 상태 머신으로 진입한다.</summary>
+    public void TriggerChargeAttack()
+    {
+        Animator.SetTrigger(HashChargeAttackTrigger);
+    }
+
+    /// <summary>남아 있는 강공격 진입 요청을 제거한다.</summary>
+    public void ResetTriggerChargeAttack()
+    {
+        Animator.ResetTrigger(HashChargeAttackTrigger);
     }
 
     public void SetIsDashAttack(bool isDashAttack)
@@ -206,16 +244,34 @@ public class HeroAnimation : MonoBehaviour
         return Animator.GetBool(HashIsDashAttack);
     }
 
-    // --- 상체 영역 독립 재생 (발도/납도) ---
-
-    public void DrawSword()
+    // --- 상체 영역 독립 재생 (무기 장착 / 해제) ---
+    public void SetUpperBodyLayerWeight(float weight)
     {
-        Animator.CrossFadeInFixedTime("Draw_Start", 0.1f, _upperBodyLayerIndex);
+        Animator.SetLayerWeight(
+            _upperBodyLayerIndex,
+            Mathf.Clamp01(weight));
     }
 
-    public void SheathSword()
+    public void DrawWeapon()
     {
-        Animator.CrossFadeInFixedTime("Sheath_Start", 0.1f, _upperBodyLayerIndex);
+        SetUpperBodyLayerWeight(1f);
+
+        Animator.CrossFadeInFixedTime(
+            HashDrawWeaponState,
+            0.1f,
+            _upperBodyLayerIndex,
+            0f);
+    }
+
+    public void DisarmWeapon()
+    {
+        SetUpperBodyLayerWeight(1f);
+
+        Animator.CrossFadeInFixedTime(
+            HashDisarmWeaponState,
+            0.1f,
+            _upperBodyLayerIndex,
+            0f);
     }
 
     // --- Trigger 제어 영역 ---
@@ -226,19 +282,19 @@ public class HeroAnimation : MonoBehaviour
     public void ClearEveryTrigger()
     {
         ResetTriggerAttack();
+        ResetTriggerChargeAttack();
         ResetTriggerSkill();
         ResetTriggerExSkill();
         ResetTriggerUlt();
         ResetTriggerSwapIn();
         ResetTriggerSwapOut();
-        ResetTriggerParry();
-        ResetTriggerParryImpact();
         ResetTriggerParryCounter();
         ResetTriggerDodgeCounter();
         ResetTriggerDeath();
         ResetTriggerChain();
         ResetTriggerHit();
         ResetTriggerQuickAssist();
+        ResetTriggerTest();
     }
 
     public void TriggerAttack()
@@ -264,24 +320,6 @@ public class HeroAnimation : MonoBehaviour
 
     public void TriggerSwapOut() => Animator.SetTrigger(HashSwapOutTrigger);
     public void ResetTriggerSwapOut() => Animator.ResetTrigger(HashSwapOutTrigger);
-
-    public void TriggerParry()
-    {
-        Animator.SetTrigger(HashParryTrigger);
-    }
-    public void ResetTriggerParry()
-    {
-        Animator.ResetTrigger(HashParryTrigger);
-    }
-
-    public void TriggerImpactParry()
-    {
-        Animator.SetTrigger(HashParryImpactTrigger);
-    }
-    public void ResetTriggerParryImpact()
-    {
-        Animator.ResetTrigger(HashParryImpactTrigger);
-    }
 
     public void TriggerParryCounter()
     {
@@ -359,6 +397,43 @@ public class HeroAnimation : MonoBehaviour
         Animator.ResetTrigger(HashQuickAssistTrigger);
     }
 
+    public void TriggerTest()
+    {
+        Animator.SetTrigger("TestTrigger");
+    }
+    public void ResetTriggerTest()
+    {
+        Animator.ResetTrigger("TestTrigger");
+    }
+
+    #region [입장 모션]
+
+    public bool IsEntryComplete
+    {
+        get
+        {
+            AnimatorStateInfo state = Animator.GetCurrentAnimatorStateInfo(0);
+            return !Animator.IsInTransition(0) && state.fullPathHash == HashEntryState &&
+                   state.normalizedTime >= 1f;
+        }
+    }
+
+    /// <summary>
+    /// 기존 트리거와 상체 무장 전환을 정리하고 입장 전용 모션을 처음부터 재생함.
+    /// </summary>
+    public void PlayEntry()
+    {
+        ClearEveryTrigger();
+        ClearIdleLogicTimers();
+        SetIsIdle(false);
+        SetIsCombat(true);
+        SetUpperBodyLayerWeight(0f);
+        Animator.Play("UpperBody.Wait", _upperBodyLayerIndex, 0f);
+        Animator.CrossFadeInFixedTime(HashEntryState, 0f, 0, 0f);
+    }
+
+    #endregion
+
     // --- CrossFade 제어 영역  ---
 
     public void CrossFadeToIdle(float fixedTime)
@@ -393,9 +468,18 @@ public class HeroAnimation : MonoBehaviour
         Animator.CrossFadeInFixedTime("Swap_Out.Turn", fixedTime);
     }
 
+    public void CrossFadeToParryPrepare(float fixedTime)
+    {
+        Animator.CrossFadeInFixedTime(HashParryPrepareState, fixedTime);
+    }
     public void CrossFadeToParryReady(float fixedTime)
     {
         Animator.CrossFadeInFixedTime("Base Layer.Parry.Parry_Ready", fixedTime);
+    }
+
+    public void CrossFadeToParryImpact(float fixedTime)
+    {
+        Animator.CrossFadeInFixedTime(HashParryImpactState, fixedTime);
     }
 
     public void CrossFadeToParryAfterNoAttack(float fixedTime)

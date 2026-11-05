@@ -12,15 +12,25 @@ public class HeroActionRegistry : MonoBehaviour
 
     #region [프로퍼티 영역]
     
-    public bool IsInvincible => _isInvincible;
+    /// <summary>
+    /// 액션 무적 또는 CombatSandBox 무적에 따른 최종 무적 판정 여부를 반환함.
+    /// </summary>
+    public bool IsInvincibilityActive => _isInvincible || _isSandboxInvincible;
+    /// <summary>
+    /// CombatSandBox 무적을 제외한 액션 자체의 무적 여부를 반환함.
+    /// </summary>
+    public bool IsActionInvincible => _isInvincible;
     public bool IsSuperArmorActive => _isSuperArmorActive;
     public bool IsComboLinkable => _isComboLinkable;
     public bool IsComboReserved => _isComboReserved;
     public int CurrentComboIndex => _currentComboIndex;
     public int CurrentHitIndex => _currentHitIndex;
-    public bool IsButtonHolding => _isButtonHolding;
+    public bool IsAttackButtonHolding => _isAttackButtonHolding;
+    public bool IsSkillButtonHolding => _isSkillButtonHolding;
     public bool IsCancelWindowOpen => _isCancelWindowOpen;
+    public bool IsManualDodgeBlocked => _isManualDodgeBlocked;
     public bool IsAnimMoveActive => _isAnimMoveActive;
+    public bool IsTargetTrackingActive => _isTargetTrackingActive;
     public bool IsOffFieldActionActive => _isOffFieldActionActive;
     public bool IsParryCounterReserved => _isParryCounterReserved;
     public bool IsParryCounterWindowOpen => _isParryCounterWindowOpen;
@@ -31,10 +41,10 @@ public class HeroActionRegistry : MonoBehaviour
 
     [Header("IsInvincible")]
     private bool _isInvincible = false;             // 무적 판정 여부
+    private bool _isSandboxInvincible; // CombatSandBox 기능: 액션 종료와 무관하게 유지되는 무적 플래그.
 
     [Header("IsSuperArmorActive")]
     private bool _isSuperArmorActive = false;       // 슈퍼아머 여부
-    // FSM 기반으로 편하게 관리할까..
 
     [Header("Combo Fields")]
     private int _currentComboIndex = 0;             // 현재 콤보 단계
@@ -47,13 +57,15 @@ public class HeroActionRegistry : MonoBehaviour
     private int _currentHitIndex = 0;               
 
     [Header("Charge Fields")]
-    private bool _isButtonHolding = false;          // 현재 키가 물리적으로 눌려 있는지 여부
+    private bool _isAttackButtonHolding = false;    // 공격 버튼 유지 여부
+    private bool _isSkillButtonHolding = false;     // 스킬 버튼 유지 여부
 
     [Header("CancleWindow Fields")]
     private bool _isCancelWindowOpen = false;       // 기존 모션 캔슬 가능 여부
 
     [Header("AnimMovement Fields")]
     private bool _isAnimMoveActive = false;         // 공격 애니메이션 중 이 플래그가 켜져있으면 Movement에서 이동처리
+    private bool _isTargetTrackingActive = false;   // 애니메이션 이동 방향을 타겟 기준으로 지속 갱신할지 여부
 
     [Header("Swap Fields")]
     private bool _isOffFieldActionActive = false;
@@ -64,6 +76,13 @@ public class HeroActionRegistry : MonoBehaviour
     [Header("Perfect Dodge Activate Flag")]
     private bool _canPerfectDodgeCounter = false;
 
+    [Header("Dodge Counter Reservation")]
+    private bool _isDodgeCounterReserved;
+    public bool IsDodgeCounterReserved => _isDodgeCounterReserved;
+
+    [Header("Manual Dodge")]
+    private bool _isManualDodgeBlocked = false;
+
 
 
     private void Awake()
@@ -73,10 +92,23 @@ public class HeroActionRegistry : MonoBehaviour
 
     #region [필드 관리 메서드 영역]
 
+    /// <summary>
+    /// 수동 회피 입력의 차단 여부를 설정함.
+    /// </summary>
+    public void SetIsManualDodgeBlocked(bool isBlocked) => _isManualDodgeBlocked = isBlocked;
+
     public void SetIsInvincible(bool isInvincible)
     {
         if (_isInvincible == isInvincible) return;
         _isInvincible = isInvincible;
+    }
+
+    /// <summary>
+    /// CombatSandBox 기능의 무적 여부를 기존 액션 무적과 독립적으로 설정함.
+    /// </summary>
+    public void SetSandboxInvincible(bool isEnabled)
+    {
+        _isSandboxInvincible = isEnabled;
     }
 
     public void SetIsSuperArmorActive(bool isActive)
@@ -132,7 +164,11 @@ public class HeroActionRegistry : MonoBehaviour
             _hero.Animation.SetIsComboReserved(isComboReserved);
         }
     }
-    public void SetIsButtonHolding(bool isButtonHolding) => _isButtonHolding = isButtonHolding;
+    /// <summary>공격 버튼의 유지 여부를 기록한다.</summary>
+    public void SetIsAttackButtonHolding(bool isHolding) => _isAttackButtonHolding = isHolding;
+
+    /// <summary>스킬 버튼의 유지 여부를 기록한다.</summary>
+    public void SetIsSkillButtonHolding(bool isHolding) => _isSkillButtonHolding = isHolding;
     public void OpenCancelWindow() => _isCancelWindowOpen = true;
     public void CloseCancelWindow() => _isCancelWindowOpen = false;
     public void ActivateAnimMove()
@@ -142,7 +178,9 @@ public class HeroActionRegistry : MonoBehaviour
     public void DeactivateAnimMove()
     {
         _isAnimMoveActive = false;
+        _isTargetTrackingActive = false;
     }
+    public void SetIsTargetTrackingActive(bool isActive) => _isTargetTrackingActive = isActive;
     public void SetOffFieldActionActive(bool isActive) => _isOffFieldActionActive = isActive;
     public void SetIsParryCounterResereved(bool isReserved)
     {
@@ -183,6 +221,15 @@ public class HeroActionRegistry : MonoBehaviour
         return indexToReturn;
     }
 
+    /// <summary>
+    /// 패링 반격 예약과 즉시 반격 허용 창을 초기화함.
+    /// </summary>
+    public void ClearParryCounter()
+    {
+        SetIsParryCounterResereved(false);
+        SetIsParryCounterWindowOpen(false);
+    }
+
     public void ResetCombo()
     {
         ResetComboIndex();
@@ -197,26 +244,57 @@ public class HeroActionRegistry : MonoBehaviour
     /// </summary>
     public void ResetActionRegistry()
     {
+        ClearDodgeCounter();
+        ClearParryCounter();
         _currentComboIndex = 0;
         _currentHitIndex = 0; // 히트 인덱스 청소
         _isComboReserved = false;
         _isComboLinkable = false;
         _isCancelWindowOpen = false;
-        _isButtonHolding = false;
+        _isManualDodgeBlocked = false;
+        _isAttackButtonHolding = false;
+        _isSkillButtonHolding = false;
         _isInvincible = false; // 무적 상태도 안전하게 꺼줌
         _isSuperArmorActive = false;
+        DeactivateAnimMove();
     }
 
     /// <summary>
-    /// 극한회피 이후 공격키 입력시 호출
-    /// _canPerfectDodgeCounter 를 소모해서 DodgeCounter 시도
+    /// 극한회피 반격 권한을 소비하고 회피 종료 후 실행할 반격을 예약함.
     /// </summary>
-    public bool ConsumeDodgeCounter()
+    public bool TryReserveDodgeCounter()
     {
-        if (!_canPerfectDodgeCounter) return false;
+        if (_isDodgeCounterReserved || !_canPerfectDodgeCounter)
+        {
+            return false;
+        }
 
         _canPerfectDodgeCounter = false;
+        _isDodgeCounterReserved = true;
         return true;
+    }
+
+    /// <summary>
+    /// 예약된 회피반격을 소비하고 실행 여부를 반환함.
+    /// </summary>
+    public bool ConsumeReservedDodgeCounter()
+    {
+        if (!_isDodgeCounterReserved)
+        {
+            return false;
+        }
+
+        _isDodgeCounterReserved = false;
+        return true;
+    }
+
+    /// <summary>
+    /// 회피 종료 또는 중단 시 남은 반격 권한과 예약을 정리함.
+    /// </summary>
+    public void ClearDodgeCounter()
+    {
+        _canPerfectDodgeCounter = false;
+        _isDodgeCounterReserved = false;
     }
 
     #endregion

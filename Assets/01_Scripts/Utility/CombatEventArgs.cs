@@ -4,18 +4,45 @@
 public class CombatEventContext
 {
     // 공격자 인스턴스
-    public IAttacker Attacker { get; private set;}  
+    public IAttacker Attacker { get; private set; }
+    // 공격 생성 시 확정한 판정 방식. 적중 시 공격자의 현재 상태와 무관하게 유지.
+    public HitDetectionType HitDetectionType { get; private set; }
+    // 판정 생성 시 확정한 모션 반경. 투사체는 0이면 단일 타격, 양수이면 폭발 반경으로 사용함.
+    public float HitRadius { get; private set; }
+    // 공격 생성 시 확정한 Hero 공격 종류. 적중 시점의 상태와 무관하게 유지함.
+    public HeroCombatAttackType AttackType { get; private set; }
+    // 공격 생성 시점의 콤보 모션 인덱스. 해당 없는 공격은 -1을 사용함.
+    public int ComboIndex { get; private set; }
     // 피격자 인스턴스 - Target은 루프 돌면서 갈아끼우므로 set
     public IDamageable Target { get; set; }
 
 
-    // 연출용 타격 위치 및 방향
+    // 타격 지점 기반 공간 정보
     public Vector3 ImpactPoint { get; set; }
     public Vector3 ImpactDirection { get; set; }
     public Vector3 SurfaceNormal { get; set; }
     public Vector3 SlashDirection { get; set; }
     public bool HasImpactData { get; set; }
+
+    // 피격 반응 방향 정보
+    public HitReactionDirectionMode ReactionDirectionMode { get; private set; }
+    public Vector3 ReactionDirection { get; private set; }
+    public bool HasReactionDirection { get; private set; }
+
     public HitMarkDataSO HitMarkData { get; private set; }
+    // 대상에게 실제 피해 적용이 성공했을 때 재생할 효과음.
+    public AudioCueSO HitImpactSFX { get; private set; }
+
+    // 동일한 타격에서 적중음 재생 요청이 수락됐는지 기록함.
+    public bool HasPlayedHitImpactSFX { get; private set; }
+
+    /// <summary>
+    /// 해당 타격의 적중음 재생 요청이 수락됐음을 기록함.
+    /// </summary>
+    public void MarkHitImpactSFXPlayed()
+    {
+        HasPlayedHitImpactSFX = true;
+    }
 
 
     // 공격 데이터(SO)에서 가져온 순수 계수 및 기믹 정보
@@ -29,32 +56,13 @@ public class CombatEventContext
     // 이 타격이 그로기 상태의 적에게 Chain Attack을 열 수 있는지 여부
     public bool CanTriggerChainAttack { get; private set; }
 
-    // 공통 전투 데이터 생성자
+    /// <summary>
+    /// 공격 종류와 판정 방식 및 전투 데이터를 저장함.
+    /// </summary>
     public CombatEventContext(
         IAttacker attacker,
-        float damageMultiplier,
-        float dazeMultiplier,
-        HitType hitType,
-        bool canExtendGroggy,
-        float groggyExtendTime,
-        float payBackEnergy,
-        float payBackDecibel,
-        bool canTriggerChainAttack)
-    {
-        Attacker = attacker;
-        DamageMultiplier = damageMultiplier;
-        DazeMultiplier = dazeMultiplier;
-        HitType = hitType;
-        CanExtendGroggy = canExtendGroggy;
-        GroggyExtendTime = groggyExtendTime;
-        PayBackEnergy = payBackEnergy;
-        PayBackDecibel = payBackDecibel;
-        CanTriggerChainAttack = canTriggerChainAttack;
-    }
-
-    // HitMark 데이터를 사용하는 공격용 확장 생성자
-    public CombatEventContext(
-        IAttacker attacker,
+        HitDetectionType hitDetectionType,
+        float hitRadius,
         float damageMultiplier,
         float dazeMultiplier,
         HitType hitType,
@@ -63,9 +71,54 @@ public class CombatEventContext
         float payBackEnergy,
         float payBackDecibel,
         bool canTriggerChainAttack,
-        HitMarkDataSO hitMarkData)
+        HitReactionDirectionMode hitReactionDirectionMode =
+            HitReactionDirectionMode.Auto,
+        HeroCombatAttackType attackType = HeroCombatAttackType.None,
+        AudioCueSO hitImpactSFX = null,
+        int comboIndex = -1)
+    {
+        Attacker = attacker;
+        AttackType = attackType;
+        ComboIndex = comboIndex;
+        HitDetectionType = hitDetectionType;
+        HitRadius = hitRadius;
+        DamageMultiplier = damageMultiplier;
+        DazeMultiplier = dazeMultiplier;
+        HitType = hitType;
+        CanExtendGroggy = canExtendGroggy;
+        GroggyExtendTime = groggyExtendTime;
+        PayBackEnergy = payBackEnergy;
+        PayBackDecibel = payBackDecibel;
+        CanTriggerChainAttack = canTriggerChainAttack;
+        ReactionDirectionMode = hitReactionDirectionMode;
+        HitImpactSFX = hitImpactSFX;
+    }
+
+    /// <summary>
+    /// 공격 종류와 판정 방식 및 전투 데이터에 HitMark 정보를 함께 저장함.
+    /// </summary>
+    public CombatEventContext(
+        IAttacker attacker,
+        HitDetectionType hitDetectionType,
+        float hitRadius,
+        float damageMultiplier,
+        float dazeMultiplier,
+        HitType hitType,
+        bool canExtendGroggy,
+        float groggyExtendTime,
+        float payBackEnergy,
+        float payBackDecibel,
+        bool canTriggerChainAttack,
+        HitMarkDataSO hitMarkData,
+        HitReactionDirectionMode hitReactionDirectionMode =
+            HitReactionDirectionMode.Auto,
+        HeroCombatAttackType attackType = HeroCombatAttackType.None,
+        AudioCueSO hitImpactSFX = null,
+        int comboIndex = -1)
         : this(
             attacker,
+            hitDetectionType,
+            hitRadius,
             damageMultiplier,
             dazeMultiplier,
             hitType,
@@ -73,9 +126,37 @@ public class CombatEventContext
             groggyExtendTime,
             payBackEnergy,
             payBackDecibel,
-            canTriggerChainAttack)
+            canTriggerChainAttack,
+            hitReactionDirectionMode,
+            attackType,
+            hitImpactSFX,
+            comboIndex)
     {
         HitMarkData = hitMarkData;
+    }
+
+    /// <summary>
+    /// 판정 실행 객체가 충돌 순간 계산한 월드 방향을 저장
+    /// </summary>
+    public void SetReactionDirection(Vector3 direction)
+    {
+        if (direction.sqrMagnitude < 0.0001f)
+        {
+            ClearReactionDirection();
+            return;
+        }
+
+        ReactionDirection = direction.normalized;
+        HasReactionDirection = true;
+    }
+
+    /// <summary>
+    /// Context를 다른 대상에게 재사용하기 전에 방향 정보를 초기화
+    /// </summary>
+    public void ClearReactionDirection()
+    {
+        ReactionDirection = Vector3.zero;
+        HasReactionDirection = false;
     }
 }
 
@@ -92,6 +173,8 @@ public struct HitInfo
     public float groggyExtendTime;  // 그로기 연장 수치
     public float payBackEnergy;     // 타격 성공시 채워줄 에너지
     public float payBackDecibel;    // 타격 성공시 채워줄 데시벨
+    public Vector3 reactionDirection;   // 피격 반응에 사용할 월드 방향
+    public bool hasReactionDirection;   // 유효한 피격 방향 존재 여부
 
     // CanTriggerChainAttack 는 CombatManager / ChainAttackManager - ProcessHit 단에서 사용되고
     // Enemy or Hero - TakeDamage 에서는 사용되지 않으므로 선언 X

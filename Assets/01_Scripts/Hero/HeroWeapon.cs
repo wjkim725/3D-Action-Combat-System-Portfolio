@@ -9,6 +9,8 @@ public class HeroWeapon : MonoBehaviour
     public enum WeaponDisplayState { Hide, OutCombat, InCombat }
 
     private WeaponDisplayState _currentState = WeaponDisplayState.Hide;
+    public WeaponDisplayState CurrentState => _currentState;
+    public event System.Action<WeaponDisplayState> OnWeaponDisplayStateChanged;
 
     [SerializeField]
     private Renderer[] _idleWeaponRenderers;
@@ -28,37 +30,47 @@ public class HeroWeapon : MonoBehaviour
     }
 
     /// <summary>
-    /// WeaponDisplayState 상태 전환 메서드
+    /// 무기 표시를 적용한 뒤 실제 상태 변경을 구독자에게 알림.
     /// </summary>
     public void ChangeWeaponDisplayState(WeaponDisplayState newState)
     {
+        bool hasChanged = _currentState != newState;
         _currentState = newState;
         ApplyVisibility();
+        if (hasChanged) OnWeaponDisplayStateChanged?.Invoke(_currentState);
     }
 
     /// <summary>
-    /// 현재 WeaponDisplayState 상태에 맞춰 렌더러 On/Off
+    /// 전체 무기를 숨긴 뒤 현재 표시 상태에 해당하는 렌더러만 표시함.
     /// </summary>
     private void ApplyVisibility()
     {
-        // Combat State - CombatWeaponRenderers 활성화
-        if (_combatWeaponRenderers != null)
-        {
-            bool isHandVisible = (_currentState == WeaponDisplayState.InCombat);
-            foreach (var r in _combatWeaponRenderers) if (r != null) r.enabled = isHandVisible;
-        }
+        SetRenderersVisible(_idleWeaponRenderers, false);
+        SetRenderersVisible(_combatWeaponRenderers, false);
 
-        // Idle State - IdelWeaponRenderers 활성화
-        if (_idleWeaponRenderers != null)
+        switch (_currentState)
         {
-            bool isBackVisible = (_currentState == WeaponDisplayState.OutCombat);
-            foreach (var r in _idleWeaponRenderers) if (r != null) r.enabled = isBackVisible;
-        }
+            case WeaponDisplayState.OutCombat:
+                SetRenderersVisible(_idleWeaponRenderers, true);
+                break;
 
-        // Hide State - AllWeaponRenderes 비활성화
-        if (_currentState == WeaponDisplayState.Hide)
+            case WeaponDisplayState.InCombat:
+                SetRenderersVisible(_combatWeaponRenderers, true);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 지정된 렌더러 목록의 표시 여부를 설정함.
+    /// </summary>
+    private void SetRenderersVisible(Renderer[] renderers, bool isVisible)
+    {
+        if (renderers == null) return;
+
+        foreach (Renderer targetRenderer in renderers)
         {
-            foreach (var r in AllWeaponRenderers) if(r != null) r.enabled = false;
+            if (targetRenderer != null)
+                targetRenderer.enabled = isVisible;
         }
     }
 

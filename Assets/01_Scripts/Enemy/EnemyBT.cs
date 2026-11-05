@@ -18,6 +18,9 @@ public class EnemyBlackboard
 
     public EnemyAttackPattern SelectedAttackPattern;
     public bool CanAttack;
+
+    // Combat Wait
+    public EnemyCombatWaitType NextCombatWaitType = EnemyCombatWaitType.Orbit;
 }
 
 public enum NodeState { Running, Success, Failure }
@@ -134,6 +137,40 @@ public class BTCondition_CheckGlobalCooldown : BTNode
     }
 }
 
+public class BTCondition_ShouldOrbit : BTNode
+{
+    public BTCondition_ShouldOrbit(
+        EnemyBlackboard blackboard)
+        : base(blackboard)
+    {
+    }
+
+    public override NodeState Evaluate()
+    {
+        return blackboard.NextCombatWaitType ==
+               EnemyCombatWaitType.Orbit
+            ? NodeState.Success
+            : NodeState.Failure;
+    }
+}
+
+public class BTCondition_ShouldCombatIdle : BTNode
+{
+    public BTCondition_ShouldCombatIdle(
+        EnemyBlackboard blackboard)
+        : base(blackboard)
+    {
+    }
+
+    public override NodeState Evaluate()
+    {
+        return blackboard.NextCombatWaitType ==
+               EnemyCombatWaitType.CombatIdle
+            ? NodeState.Success
+            : NodeState.Failure;
+    }
+}
+
 public class BTCondition_IsInChaseRange : BTNode
 {
     public BTCondition_IsInChaseRange(EnemyBlackboard blackboard) : base(blackboard) { }
@@ -208,35 +245,139 @@ public class BTAction_Idle : BTNode
     }
 }
 
-public class BTAction_Orbit : BTNode
+public class BTAction_CombatIdle : BTNode
 {
-    private float _orbitDuration = 0.5f; // Orbit을 유지할 시간 (예: 2초)
-    private float _startTime;
-    private bool _isOrbiting = false;   // 현재 Orbit 타이머가 도는 중인지 체크할 플래그
-
-    public BTAction_Orbit(EnemyBlackboard blackboard) : base(blackboard) { }
-
+    public BTAction_CombatIdle(
+        EnemyBlackboard blackboard) : base(blackboard)
+    {
+    }
 
     public override NodeState Evaluate()
     {
-        // 1. 처음 진입할 때 타이머 시작
-        if (blackboard.Owner.CurrentState != EnemyState.Orbit || !_isOrbiting)
+        blackboard.NextCombatWaitType = EnemyCombatWaitType.Orbit;
+
+        blackboard.Owner.ChangeState(EnemyState.CombatIdle);
+
+        return NodeState.Success;
+    }
+}
+
+public class BTAction_Orbit : BTNode
+{
+    
+    // 목적지에 도달하지 못했을 때를 대비한 안전 제한시간
+    private const float MaxRepositionDuration = 3f;
+
+    private float _elapsedRepositionTime;
+    private bool _isOrbiting;
+
+    public BTAction_Orbit(
+        EnemyBlackboard blackboard)
+        : base(blackboard)
+    {
+    }
+
+    public override NodeState Evaluate()
+    {
+        Enemy owner =
+            blackboard.Owner;
+
+        if (owner == null ||
+            owner.Movement == null)
         {
-            _startTime = Time.time;
+            ResetOrbitAction();
+            return NodeState.Failure;
+        }
+
+        /*
+         * 새로운 Reposition 시작
+         *
+         * EnemyState.Orbit 진입 시
+         * EnemyMovement.StartOrbiting()이 호출되고,
+         * 아직 목적지가 없으므로 BeginOrbiting()이 실행.
+         */
+        if (!_isOrbiting)
+        {
             _isOrbiting = true;
-            blackboard.Owner.ChangeState(EnemyState.Orbit);
+            _elapsedRepositionTime = 0f;
+
+            owner.ChangeState(
+                EnemyState.Orbit
+            );
+
             return NodeState.Running;
         }
 
-        // 2. 설정한 시간이 아직 안 지났다면 계속 돌기 유지
-        if (Time.time < _startTime + _orbitDuration)
+        /*
+         * Hit 등으로 Orbit이 중단됐다가
+         * Idle 상태로 복귀한 경우.
+         *
+         * EnemyMovement에 기존 목적지가 남아 있으므로
+         * StartOrbiting() 내부에서 ResumeOrbiting()이 실행된다.
+         */
+        if (owner.CurrentState !=
+            EnemyState.Orbit)
         {
-            return NodeState.Running; // 확실하게 계속 Running을 리턴
+            owner.ChangeState(
+                EnemyState.Orbit
+            );
+
+            return NodeState.Running;
         }
 
-        // 3. 시간 다 채웠으면 플래그 끄고 Success 리턴해서 트리 리셋
-        _isOrbiting = false;
+        /*
+         * 실제 Orbit 상태로 움직이는 시간만 누적한다.
+         * AI가 Hit 상태로 정지한 시간은 포함되지 않는다.
+         */
+        _elapsedRepositionTime +=
+            Time.deltaTime;
+
+        bool hasReachedDestination =
+            owner.Movement
+                .HasReachedRepositionDestination;
+
+        bool hasTimedOut =
+            _elapsedRepositionTime >=
+            MaxRepositionDuration;
+
+        if (!hasReachedDestination &&
+            !hasTimedOut)
+        {
+            return NodeState.Running;
+        }
+
+        /*
+         * 제한시간 초과로 종료됐다면
+         * 아직 이동 속도가 남아 있을 수 있으므로 즉시 정지한다.
+         *
+         * 목적지 도착 시에는 OrbitAndWalk()에서 이미
+         * CurrentMoveSpeed와 Animator MoveSpeed가 0으로 정리된다.
+         */
+        if (hasTimedOut &&
+            !hasReachedDestination)
+        {
+            owner.Movement.StopMovingImmediate();
+        }
+
+        owner.Movement.CompleteOrbiting();
+        owner.AI.MarkOrbitEnded();
+
+        blackboard.NextCombatWaitType =
+            EnemyCombatWaitType.CombatIdle;
+
+        ResetOrbitAction();
+
         return NodeState.Success;
+    }
+
+    /// <summary>
+    /// BTAction 내부의 Reposition 진행 정보를 초기화한다.
+    /// EnemyMovement의 목적지 정보는 CompleteOrbiting()에서 정리한다.
+    /// </summary>
+    private void ResetOrbitAction()
+    {
+        _isOrbiting = false;
+        _elapsedRepositionTime = 0f;
     }
 }
 

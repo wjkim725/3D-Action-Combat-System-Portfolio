@@ -14,6 +14,8 @@ public class PartySwapManager : MonoBehaviour
         public SwapDirection Direction { get; }
         public HeroSwapSystem.SwapType SwapType { get; }
         public Enemy ActionTarget { get; }
+        public Vector3 TargetPosition { get; }
+        public Vector3 TargetForward { get; }
         public Vector3 OutHeroPosition { get; }
         public Quaternion OutHeroRotation { get; }
 
@@ -22,13 +24,17 @@ public class PartySwapManager : MonoBehaviour
             Hero inHero,
             SwapDirection direction,
             HeroSwapSystem.SwapType swapType,
-            Enemy actionTarget)
+            Enemy actionTarget,
+            Vector3 targetPosition = default,
+            Vector3 targetForward = default)
         {
             OutHero = outHero;
             InHero = inHero;
             Direction = direction;
             SwapType = swapType;
             ActionTarget = actionTarget;
+            TargetPosition = targetPosition;
+            TargetForward = targetForward;
             OutHeroPosition = outHero.transform.position;
             OutHeroRotation = outHero.transform.rotation;
         }
@@ -36,9 +42,19 @@ public class PartySwapManager : MonoBehaviour
 
     public static PartySwapManager Instance { get; private set; }
 
+    // 일반·패링·빠른지원 교대의 실행 성공과 방향을 전달함. 체인·사망 교대는 별도 경로임.
+    public event System.Action<Hero, Hero, SwapDirection, HeroSwapSystem.SwapType> OnSwapExecuted;
+
     [SerializeField] private CameraController _cameraController;
     [SerializeField] private PartyStateManager _partyStateManager;
 
+
+    [Header("Swap Position Correction")]
+    [Tooltip("교대 위치 검사에서 장애물로 취급할 레이어. Default의 투명벽을 포함함.")]
+    [SerializeField] private LayerMask _swapObstacleMask = (1 << 0) | (1 << 8);
+
+    [Tooltip("교대 위치를 보정할 때 충돌 지점에서 확보할 여유 거리(m).")]
+    [SerializeField, Min(0.001f)] private float _swapCollisionClearance = 0.03f;
 
     [Header("Parry Assist Entrance Position Setting")]
     [SerializeField] private float _parrySpawnDistance = 1.5f;
@@ -95,7 +111,7 @@ public class PartySwapManager : MonoBehaviour
         SubscribeInputEvents();
 
         StopAllCoroutines();
-        StartCoroutine(SetPartyState());
+        StartCoroutine(InitializePartyFieldState());
     }
 
     private void OnDestroy()
@@ -108,10 +124,37 @@ public class PartySwapManager : MonoBehaviour
         }
     }
 
-    public IEnumerator SetPartyState()
+    /// <summary>
+    /// 비활성 Hero의 초기화를 기다린 뒤 대기 상태로 준비하여 파티에 합류시킴.
+    /// 현재 조작 Hero의 위치, 상태와 카메라는 변경하지 않음.
+    /// </summary>
+    public IEnumerator AddPartyMember(Hero hero)
     {
-        yield return new WaitForSeconds(0.01f);
+        if (_partyStateManager == null || hero == null) yield break;
+        if (PartyMembers != null && System.Array.IndexOf(PartyMembers, hero) >= 0) yield break;
 
+        hero.gameObject.SetActive(true);
+        if (!hero.gameObject.activeInHierarchy || hero.Status == null || hero.SwapSystem == null) yield break;
+        hero.DisableInput();
+        // 최초 합류는 퇴장 연출 없이 숨겨 초기화 대기 프레임에 모델이 노출되지 않게 함.
+        hero.SwapSystem.SwitchHeroRenderer(false);
+        hero.SwapSystem.SwitchHeroCollider(false);
+        hero.SwapSystem.SwitchHeroCharacterController(false);
+        hero.Status.SetEnergyLockedAtZero(_partyStateManager.IsPartyEnergyLockedAtZero);
+
+        // 처음 활성화된 Hero의 Start가 Idle을 설정한 뒤 최종 대기 상태를 확정함.
+        yield return null;
+        if (hero == null) yield break;
+        hero.DisableInput();
+        hero.ChangeState(HeroState.InActive);
+        _partyStateManager.TryAddPartyMember(hero);
+    }
+
+    /// <summary>
+    /// 첫 렌더링 전에 현재 Hero만 즉시 표시하고, 초기화 이후 HUD를 갱신함.
+    /// </summary>
+    public IEnumerator InitializePartyFieldState()
+    {
         Hero[] partyMembers = PartyMembers;
         if (partyMembers == null || partyMembers.Length == 0) yield break;
 
@@ -129,17 +172,23 @@ public class PartySwapManager : MonoBehaviour
                     LockOnManager.Instance.RefreshSoftLockTarget();
                 }
 
-                hero.SwapSystem.PrepareSwapInEntrance();
-                hero.EnableInput();
+                // 하단 코드는 이제 PartyStateManager - OnCurrnetHeroChanged 이벤트 기점으로 호출
+                // _cameraController?.SetFollowTarget(hero);
+
+                hero.SwapSystem.SetInitialFieldPresence(true);
+                if (hero.CurrentState != HeroState.Entry) hero.EnableInput();
             }
             else
             {
                 hero.ChangeState(HeroState.InActive);
                 hero.DisableInput();
+                // InActive 진입의 퇴장 Fade를 취소하고 최초 대기 멤버를 즉시 숨김.
+                hero.SwapSystem.SetInitialFieldPresence(false);
             }
         }
 
-        // 모든 파티원 초기화 완료 후 HUD 갱신
+        // 다른 컴포넌트의 Start가 완료된 뒤 HUD 구독자에게 알림.
+        yield return null;
         _partyStateManager.NotifyCurrentHeroChanged();
     }
 
@@ -207,7 +256,8 @@ public class PartySwapManager : MonoBehaviour
             parryTarget
         );
 
-        ExecuteSwap(context);
+        if (!ExecuteSwap(context) && swapType == HeroSwapSystem.SwapType.Parry)
+            CombatManager.Instance?.CancelParryAssistRequest(inHero);
     }
 
     /// <summary>
@@ -246,7 +296,7 @@ public class PartySwapManager : MonoBehaviour
         CombatManager combatManager = CombatManager.Instance;
 
         if (combatManager == null ||
-            !combatManager.TryConsumeParryAssistRequest(out parryTarget))
+            !combatManager.TryConsumeParryAssistRequest(inHero, out parryTarget))
         {
             Debug.LogWarning(
                 $"[Parry Assist] 패링 기회가 이미 소비됐거나 " +
@@ -300,7 +350,9 @@ public class PartySwapManager : MonoBehaviour
             inHero,
             quickContext.Direction,
             HeroSwapSystem.SwapType.QuickAssist,
-            quickContext.AssistTarget
+            quickContext.AssistTarget,
+            quickContext.TargetPosition,
+            quickContext.TargetForward
         );
 
         if (!ExecuteSwap(swapContext))
@@ -318,8 +370,8 @@ public class PartySwapManager : MonoBehaviour
     #region [교대 실행 영역]
 
     /// <summary>
-    /// 검증이 끝난 교대 정보를 기준으로 퇴장·등장·상태 전환을 순서대로 처리
-    /// 현재 Hero 인덱스와 이벤트는 모든 실행이 끝난 뒤 확정
+    /// 일반 교대의 안전한 위치를 먼저 확인하고 퇴장·등장·상태 전환을 처리함.
+    /// 현재 Hero 인덱스와 이벤트는 모든 실행이 끝난 뒤 확정함.
     /// </summary>
     private bool ExecuteSwap(SwapContext context)
     {
@@ -327,11 +379,24 @@ public class PartySwapManager : MonoBehaviour
         Hero inHero = context.InHero;
         HeroSwapSystem.SwapType swapType = context.SwapType;
 
+        // 퇴장과 입력 차단 전에 일반 교대의 안전한 등장 위치를 확정함.
+        Vector3 normalSwapPosition = context.OutHeroPosition;
+        if (swapType == HeroSwapSystem.SwapType.Normal &&
+            !TryResolveNormalSwapPosition(context, out normalSwapPosition))
+        {
+            return false;
+        }
+
         // 패링지원 대상은 검증 완료 후 등장 Hero에게 주입
         if (swapType == HeroSwapSystem.SwapType.Parry ||
             swapType == HeroSwapSystem.SwapType.QuickAssist)
         {
-            inHero.SetCounterTarget(context.ActionTarget);
+            Enemy target = context.ActionTarget;
+            if (swapType == HeroSwapSystem.SwapType.QuickAssist &&
+                (target == null || !target.isActiveAndEnabled || target.Status == null || target.Status.IsDead))
+                inHero.ClearCounterTarget();
+            else
+                inHero.SetCounterTarget(target);
         }
 
         // 결정된 타입을 등장/퇴장 영웅 장부에 명시적 주입
@@ -342,23 +407,38 @@ public class PartySwapManager : MonoBehaviour
         outHero.DisableInput();
         outHero.SwapSystem.BeginSwapOutProcess(swapType);
 
-        // inHero 등장 위치 처리
-        PrepareIncomingHeroForSwap(
-            inHero,
-            context.OutHeroPosition,
-            context.OutHeroRotation,
-            swapType,
-            context.Direction,
-            context.ActionTarget
-        );
+        // 일반 교대는 검사한 위치를 적용하고 다른 교대는 기존 배치 경로를 유지함.
+        if (swapType == HeroSwapSystem.SwapType.Normal)
+        {
+            inHero.transform.SetPositionAndRotation(normalSwapPosition, context.OutHeroRotation);
+        }
+        else if (swapType == HeroSwapSystem.SwapType.QuickAssist)
+        {
+            // 대상이 사망·제거되어도 실행 정보에 확정된 좌표로 등장함.
+            PrepareIncomingHeroNearPosition(inHero, context.TargetPosition, context.TargetForward,
+                context.OutHeroPosition, context.OutHeroRotation, _quickAssistSpawnDistance);
+        }
+        else
+        {
+            PrepareIncomingHeroForSwap(
+                inHero,
+                context.OutHeroPosition,
+                context.OutHeroRotation,
+                swapType,
+                context.Direction,
+                context.ActionTarget
+            );
+        }
 
         // inHero 물리적 등장
         inHero.SwapSystem.PrepareSwapInEntrance();
         inHero.EnableInput();
 
-        // LockOnManager ActiveHero 및 카메라 대상 갱신
+        // LockOnManager ActiveHero 등록
         LockOnManager.Instance?.RegisterActiveHero(inHero);
-        UpdateCameraTarget(inHero);
+
+        // CameraController 에게 교대 카메라 연출 요청
+        _cameraController?.TriggerSwapSmoothing();
 
         // inHero 최종 상태전환
         EnterIncomingHeroState(inHero, swapType);
@@ -373,6 +453,7 @@ public class PartySwapManager : MonoBehaviour
             return false;
         }
 
+        OnSwapExecuted?.Invoke(outHero, inHero, context.Direction, swapType);
         return true;
     }
 
@@ -411,15 +492,14 @@ public class PartySwapManager : MonoBehaviour
     /// 선택된 Hero의 Chain Attack 교대 실행
     /// ChainAttackManager 에서 호출
     /// </summary>
-    public bool TryExecuteChainSwap(Hero inHero, Enemy chainTarget)
+    public bool TryExecuteChainSwap(Hero inHero, Vector3 targetPosition, Vector3 targetForward)
     {
         Hero outHero = CurrentHero;
 
         if (_partyStateManager == null) return false;
-        if (outHero == null || inHero == null || chainTarget == null) return false;
+        if (outHero == null || inHero == null) return false;
         if (outHero == inHero) return false;
         if (outHero.SwapSystem == null || inHero.SwapSystem == null) return false;
-        if (chainTarget.Status == null || chainTarget.Status.IsDead) return false;
 
         if (inHero.Status == null || inHero.Status.IsDead) return false;
 
@@ -437,10 +517,14 @@ public class PartySwapManager : MonoBehaviour
         // 등장 Hero의 기존 장부 초기화
         inHero.ActionRegistry.ResetActionRegistry();
 
+        // 잔상 공격 중 재등장한 Hero가 Chain 종료 시 퇴장하지 않도록 정리함.
+        inHero.ActionRegistry.SetOffFieldActionActive(false);
+
         // ChainTarget 근처 등장 위치 설정
-        PrepareIncomingHeroNearTarget(
+        PrepareIncomingHeroNearPosition(
             inHero,
-            chainTarget,
+            targetPosition,
+            targetForward,
             outHeroPosition,
             outHeroRotation,
             _chainSpawnDistance
@@ -450,9 +534,10 @@ public class PartySwapManager : MonoBehaviour
         inHero.SwapSystem.PrepareSwapInEntrance();
         inHero.EnableInput();
 
-        // 록온 및 Gameplay 카메라의 복귀 대상 갱신
+        // LockOnManager ActiveHero 등록
         LockOnManager.Instance?.RegisterActiveHero(inHero);
-        UpdateCameraTarget(inHero);
+        // CameraController 에게 교대 카메라 연출 요청
+        _cameraController?.TriggerSwapSmoothing();
 
         // 현재 Hero 확정
         if (!_partyStateManager.TrySetCurrentHero(inHero))
@@ -468,7 +553,7 @@ public class PartySwapManager : MonoBehaviour
 
         Debug.Log(
             $"[Chain 교대] {outHero.name} → {inHero.name} | " +
-            $"대상: {chainTarget.name}"
+            $"대상 위치: {targetPosition}"
         );
 
         return true;
@@ -553,9 +638,9 @@ public class PartySwapManager : MonoBehaviour
         inHero.SwapSystem.PrepareSwapInEntrance();
         inHero.EnableInput();
 
-        // 5. 록온과 카메라 대상 갱신
+        // 5. LockOnManager ActiveHero 등록 및 카메라 SwapSmoothing
         LockOnManager.Instance?.RegisterActiveHero(inHero);
-        UpdateCameraTarget(inHero);
+        _cameraController?.TriggerSwapSmoothing();
 
         // 6. 등장 애니메이션 실행
         inHero.ChangeState(HeroState.SwapIn);
@@ -599,6 +684,79 @@ public class PartySwapManager : MonoBehaviour
     private void HandlePartyDefeat()
     {
         _partyStateManager?.NotifyPartyDefeated();
+    }
+
+    /// <summary>
+    /// 기존 좌우 뒤쪽 등장 방향을 유지하며 일반 교대의 안전한 위치를 결정함.
+    /// 출발 공간도 확보할 수 없으면 상태를 변경하지 않고 실패를 반환함.
+    /// </summary>
+    private bool TryResolveNormalSwapPosition(SwapContext context, out Vector3 resolvedPosition)
+    {
+        resolvedPosition = context.OutHeroPosition;
+        CharacterController controller = context.InHero.Movement.CharacterController;
+        if (controller == null)
+        {
+            Debug.LogError($"[일반 교대 오류] {context.InHero.name}의 CharacterController가 없습니다.");
+            return false;
+        }
+
+        float sideSign = context.Direction == SwapDirection.Next ? 1f : -1f;
+        Vector3 desiredPosition = context.OutHeroPosition +
+            context.OutHeroRotation * Vector3.right * sideSign -
+            context.OutHeroRotation * Vector3.forward;
+
+        // 비활성 Controller의 bounds 대신 등장 시점의 회전과 배율로 캡슐을 구성함.
+        Vector3 scale = controller.transform.lossyScale;
+        scale = new Vector3(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
+        float horizontalScale = Mathf.Max(scale.x, scale.z);
+        float worldRadius = controller.radius * horizontalScale;
+        float worldHeight = Mathf.Max(controller.height * scale.y, worldRadius * 2f);
+        Vector3 center = context.OutHeroPosition +
+            context.OutHeroRotation * Vector3.Scale(controller.center, scale);
+        Vector3 up = context.OutHeroRotation * Vector3.up;
+        float halfSegment = worldHeight * 0.5f - worldRadius;
+        Vector3 capsuleTop = center + up * halfSegment;
+        Vector3 capsuleBottom = center - up * halfSegment;
+
+        // 정상적인 바닥 접촉과 skinWidth 범위의 미세 겹침을 허용함.
+        float skinTolerance = Mathf.Min(
+            controller.skinWidth * Mathf.Max(horizontalScale, scale.y), worldRadius * 0.1f);
+        float queryRadius = Mathf.Max(worldRadius - skinTolerance, 0.001f);
+        if (Physics.CheckCapsule(capsuleBottom, capsuleTop, queryRadius,
+            _swapObstacleMask, QueryTriggerInteraction.Ignore))
+        {
+            return false;
+        }
+
+        Vector3 displacement = desiredPosition - context.OutHeroPosition;
+        float distance = displacement.magnitude;
+        if (distance <= 0.001f) return true;
+
+        Vector3 direction = displacement / distance;
+        float allowedDistance = distance;
+        if (Physics.CapsuleCast(capsuleBottom, capsuleTop, queryRadius, direction,
+            out RaycastHit hit, distance, _swapObstacleMask, QueryTriggerInteraction.Ignore))
+        {
+            allowedDistance = Mathf.Max(0f, hit.distance - _swapCollisionClearance);
+        }
+
+        // 첫 충돌 지점 이전에서만 재검사하여 벽 반대편의 빈 공간을 선택하지 않음.
+        const int maxPositionChecks = 5;
+        for (int i = 0; i < maxPositionChecks; i++)
+        {
+            Vector3 offset = direction * allowedDistance;
+            if (!Physics.CheckCapsule(capsuleBottom + offset, capsuleTop + offset,
+                queryRadius, _swapObstacleMask, QueryTriggerInteraction.Ignore))
+            {
+                resolvedPosition = context.OutHeroPosition + offset;
+                return true;
+            }
+
+            allowedDistance *= 0.5f;
+        }
+
+        // 출발 공간은 이미 확인했으므로 제자리 교대를 허용함.
+        return true;
     }
 
     /// <summary>
@@ -654,26 +812,6 @@ public class PartySwapManager : MonoBehaviour
     }
 
     /// <summary>
-    /// 교대 시 카메라 연출 준비
-    /// GamePlay_VCam에만 적용
-    /// </summary>
-    /// <param name="hero"></param>
-    private void UpdateCameraTarget(Hero hero)
-    {
-        if (hero == null || _cameraController == null) return;
-
-        Transform pivot = hero.transform.Find("CamPivot");
-
-        if (pivot == null)
-        {
-            pivot = hero.transform;
-        }
-
-        _cameraController.SetFollowTarget(pivot);
-        _cameraController.TriggerSwapSmoothing();
-    }
-
-    /// <summary>
     /// 유니티 인스펙터 창에서 PartyStateManager가
     /// 참조되지 않았을 때 직접 참조
     /// </summary>
@@ -702,26 +840,42 @@ public class PartySwapManager : MonoBehaviour
     {
         Transform targetTransform = actionTarget.transform;
 
+        PrepareIncomingHeroNearPosition(inHero, targetTransform.position, targetTransform.forward,
+            referencePosition, fallbackRotation, spawnDistance);
+    }
+
+    /// <summary>
+    /// 대상 위치와 방향을 기준으로 등장 위치 및 바라볼 방향을 설정함.
+    /// </summary>
+    private void PrepareIncomingHeroNearPosition(
+        Hero inHero,
+        Vector3 targetPosition,
+        Vector3 targetForward,
+        Vector3 referencePosition,
+        Quaternion fallbackRotation,
+        float spawnDistance)
+    {
+
         Vector3 directionFromTarget =
-            referencePosition - targetTransform.position;
+            referencePosition - targetPosition;
 
         directionFromTarget.y = 0f;
 
         if (directionFromTarget.sqrMagnitude < 0.01f)
         {
-            directionFromTarget = -targetTransform.forward;
+            directionFromTarget = -targetForward;
         }
 
         directionFromTarget.Normalize();
 
         Vector3 spawnPosition =
-            targetTransform.position +
+            targetPosition +
             directionFromTarget * spawnDistance;
 
         spawnPosition.y = referencePosition.y;
 
         Vector3 lookDirection =
-            targetTransform.position - spawnPosition;
+            targetPosition - spawnPosition;
 
         lookDirection.y = 0f;
 

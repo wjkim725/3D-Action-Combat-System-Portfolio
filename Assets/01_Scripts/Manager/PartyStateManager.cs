@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 /// <summary>
@@ -13,10 +13,19 @@ public class PartyStateManager : MonoBehaviour
     [SerializeField] private Hero[] _partyMembers; // 인스펙터에서 캐릭터를 파티 순서대로 할당
     [SerializeField] private int _currentHeroIndex = 0;
 
+    [Header("Combat Resource Sharing")]
+    [Range(0f, 1f)]
+    [SerializeField] private float _decibelShareRatio = 0.5f;   // 파티원 데시벨 분배 정도
+
     #region [이벤트 영역]
 
     // 현재 조작 Hero 변경 이벤트 <- 이제 PartySwapManager 는 해당 이벤트를 소유하지 않음
     public event Action<Hero> OnCurrentHeroChanged;
+
+    // 조작 Hero가 유지되더라도 파티 편성 변경을 HUD에 전달함.
+    public event Action OnPartyMembersChanged;
+
+    private bool _isPartyEnergyLockedAtZero;
 
     // 파티 전멸 상태 전달
     public event Action OnPartyDefeated;
@@ -27,6 +36,7 @@ public class PartyStateManager : MonoBehaviour
     #region [프로퍼티 영역]
 
     public Hero[] PartyMembers => _partyMembers;
+    public bool IsPartyEnergyLockedAtZero => _isPartyEnergyLockedAtZero;
     public int CurrentHeroIndex => _currentHeroIndex;
 
     public Hero CurrentHero
@@ -44,7 +54,7 @@ public class PartyStateManager : MonoBehaviour
     {
         get
         {
-            if (_partyMembers == null || _partyMembers.Length == 0) return null;
+            if (_partyMembers == null || _partyMembers.Length <= 1) return null;
 
             int nextIndex = (_currentHeroIndex + 1) % _partyMembers.Length;
             return _partyMembers[nextIndex];
@@ -55,7 +65,7 @@ public class PartyStateManager : MonoBehaviour
     {
         get
         {
-            if (_partyMembers == null || _partyMembers.Length == 0) return null;
+            if (_partyMembers == null || _partyMembers.Length <= 2) return null;
 
             int prevIndex = (_currentHeroIndex - 1 + _partyMembers.Length) % _partyMembers.Length;
             return _partyMembers[prevIndex];
@@ -87,7 +97,48 @@ public class PartyStateManager : MonoBehaviour
     }
 
 
+    #region [초기 편성 적용]
+
+    /// <summary>
+    /// 전투 시스템의 Start 이전에 씬 Hero 순서를 설정함. 상태 전환과 HUD 알림은 PartySwapManager가 처리함.
+    /// </summary>
+    public bool TryInitializeParty(Hero[] members)
+    {
+        if (members == null || members.Length == 0) return false;
+        for (int i = 0; i < members.Length; i++)
+        {
+            if (members[i] == null || !members[i].gameObject.scene.IsValid() ||
+                Array.IndexOf(members, members[i]) != i) return false;
+        }
+
+        _partyMembers = (Hero[])members.Clone();
+        _currentHeroIndex = 0;
+        _isPartyEnergyLockedAtZero = false;
+        return true;
+    }
+
+    #endregion
+
     #region [현재 Hero 상태 관리 영역]
+
+    /// <summary>
+    /// 대기 상태로 준비된 Hero를 파티 마지막에 추가하고 현재 조작 Hero를 유지함.
+    /// 합류 준비와 활성화는 PartySwapManager에서 먼저 처리함.
+    /// </summary>
+    public bool TryAddPartyMember(Hero hero)
+    {
+        if (hero == null || hero.Status == null || hero.Status.IsDead ||
+            !hero.gameObject.activeInHierarchy || hero.CurrentState != HeroState.InActive ||
+            hero.IsInputEnabled) return false;
+        if (_partyMembers != null && Array.IndexOf(_partyMembers, hero) >= 0) return false;
+
+        int count = _partyMembers != null ? _partyMembers.Length : 0;
+        Array.Resize(ref _partyMembers, count + 1);
+        _partyMembers[count] = hero;
+        hero.Status.SetEnergyLockedAtZero(_isPartyEnergyLockedAtZero);
+        OnPartyMembersChanged?.Invoke();
+        return true;
+    }
 
     /// <summary>
     /// 지정한 Hero를 현재 조작 Hero로 확정
@@ -135,7 +186,6 @@ public class PartyStateManager : MonoBehaviour
     }
 
     #endregion
-
 
     #region [파티원 조회 영역]
 
@@ -207,6 +257,12 @@ public class PartyStateManager : MonoBehaviour
         return GetAliveHeroInDirection(-1);
     }
 
+    /// <summary>
+    /// 현재 Hero를 제외하고 지정한 방향으로 파티를 순환 탐색하여
+    /// 가장 먼저 찾은 생존 Hero를 반환함.
+    /// </summary>
+    /// <param name="directionStep">탐색 방향. 정방향은 1, 역방향은 -1.</param>
+    /// <returns>생존 Hero가 없으면 null을 반환함.</returns>
     private Hero GetAliveHeroInDirection(int directionStep)
     {
         if (_partyMembers == null || _partyMembers.Length <= 1) return null;
@@ -228,6 +284,24 @@ public class PartyStateManager : MonoBehaviour
         return null;
     }
 
+    /// <summary>
+    /// 현재 Hero 인덱스를 파티 배열의 유효 범위로 보정함.
+    /// 파티 배열이 없거나 비어 있으면 인덱스를 0으로 초기화함.
+    /// </summary>
+    private void ValidateCurrentHeroIndex()
+    {
+        if (_partyMembers == null || _partyMembers.Length == 0)
+        {
+            _currentHeroIndex = 0;
+            return;
+        }
+
+        _currentHeroIndex = Mathf.Clamp(
+            _currentHeroIndex,
+            0,
+            _partyMembers.Length - 1
+        );
+    }
 
     /// <summary>
     /// 현재 파티에서 생존한 Hero 수를 반환
@@ -269,18 +343,54 @@ public class PartyStateManager : MonoBehaviour
     #endregion
 
 
-    private void ValidateCurrentHeroIndex()
-    {
-        if (_partyMembers == null || _partyMembers.Length == 0)
-        {
-            _currentHeroIndex = 0;
-            return;
-        }
+    #region [파티 전투 자원 관리 영역]
 
-        _currentHeroIndex = Mathf.Clamp(
-            _currentHeroIndex,
-            0,
-            _partyMembers.Length - 1
-        );
+    /// <summary>
+    /// 조작 여부와 관계없이 모든 파티원의 에너지 0 유지 설정을 변경함.
+    /// 단계별 적용 시점은 튜토리얼 등 요청한 시스템이 결정함.
+    /// </summary>
+    public void SetPartyEnergyLockedAtZero(bool isLocked)
+    {
+        _isPartyEnergyLockedAtZero = isLocked;
+        if (_partyMembers == null) return;
+
+        foreach (Hero hero in _partyMembers)
+        {
+            if (hero == null || hero.Status == null) continue;
+            hero.Status.SetEnergyLockedAtZero(isLocked);
+        }
     }
+
+    /// <summary>
+    /// 타격한 Hero의 데시벨 획득량을 기준으로 다른 생존 파티원에게 공유함.
+    /// </summary>
+    public void ShareDecibel(Hero sourceHero, float amount)
+    {
+        if (sourceHero == null || amount <= 0f) return;
+        if (_partyMembers == null || _partyMembers.Length <= 1) return;
+
+        // 현재 파티에 소속된 Hero의 획득량만 공유함.
+        if (Array.IndexOf(_partyMembers, sourceHero) < 0) return;
+
+        float sharedAmount = amount * _decibelShareRatio;
+        if (sharedAmount <= 0f) return;
+
+        for (int i = 0; i < _partyMembers.Length; i++)
+        {
+            Hero member = _partyMembers[i];
+
+            if (member == null || member == sourceHero) continue;
+            if (member.Status == null || member.Status.IsDead) continue;
+
+            // 같은 Hero가 중복 등록되어 있어도 한 번만 지급함.
+            if (Array.IndexOf(_partyMembers, member) != i) continue;
+
+            // 타격 성공 콜백을 거치지 않아 재공유가 발생하지 않음.
+            member.Status.ModifyDecibel(sharedAmount);
+        }
+    }
+
+    #endregion
+
+
 }

@@ -16,6 +16,11 @@ public class HeroDitherController : MonoBehaviour
     private Coroutine _fadeCoroutine;
     private float _currentFade = 1f;
 
+    /// <summary>
+    /// 디더 값이 완전히 숨겨진 상태인지 반환함.
+    /// </summary>
+    public bool IsFullyHidden => _currentFade <= 0f;
+
     private static readonly int FadeID = Shader.PropertyToID("_Fade");
 
     private void Awake()

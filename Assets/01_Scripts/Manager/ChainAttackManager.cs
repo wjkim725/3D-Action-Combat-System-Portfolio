@@ -18,6 +18,10 @@ public class ChainAttackManager : MonoBehaviour
     // Chain Attack 피격 대상
     public Enemy ChainTarget { get; private set; }
 
+    // QTE 개방 후 대상이 제거되어도 체인 등장에 사용할 위치와 방향.
+    private Vector3 _chainTargetPosition;
+    private Vector3 _chainTargetForward;
+
     // Chain Attack QTE를 발동한 Hero
     public Hero TriggerHero { get; private set; }
 
@@ -138,10 +142,13 @@ public class ChainAttackManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Chain QTE 개방 기본 조건 검사
+    /// 설정창 상태와 Chain QTE 개방 기본 조건을 검사함.
     /// </summary>
     private bool CanOpenChainSelection(Enemy target, Hero triggerHero)
     {
+        if (SettingsManager.Instance != null && SettingsManager.Instance.IsSettingsOpen)
+            return false;
+
         // Selection QTE 중에는 개방 X
         if (IsSelectionOpen) return false;
 
@@ -152,6 +159,8 @@ public class ChainAttackManager : MonoBehaviour
         }
 
         if (target == null || triggerHero == null) return false;
+        if (!target.isActiveAndEnabled || target.Status == null || target.Status.IsDead) return false;
+        if (!target.Status.IsGroggy) return false;
         if (target.Groggy == null) return false;
         if (triggerHero.Status == null || triggerHero.Status.IsDead) return false;
         if (!target.Groggy.CanConsumeChainAttack) return false;
@@ -274,8 +283,10 @@ public class ChainAttackManager : MonoBehaviour
         UnbindChainTarget();
 
         ChainTarget = target;
+        _chainTargetPosition = target.transform.position;
+        _chainTargetForward = target.transform.forward;
 
-        if (ChainTarget?.Groggy != null)
+        if (ChainTarget != null && ChainTarget.Groggy != null)
         {
             ChainTarget.Groggy.OnGroggyEnd += HandleChainTargetGroggyEnd;
         }
@@ -286,7 +297,7 @@ public class ChainAttackManager : MonoBehaviour
     /// </summary>
     private void UnbindChainTarget()
     {
-        if (ChainTarget?.Groggy != null)
+        if (ChainTarget != null && ChainTarget.Groggy != null)
         {
             ChainTarget.Groggy.OnGroggyEnd -= HandleChainTargetGroggyEnd;
         }
@@ -302,6 +313,8 @@ public class ChainAttackManager : MonoBehaviour
         _usedHeroes.Clear();
 
         ChainTarget = null;
+        _chainTargetPosition = Vector3.zero;
+        _chainTargetForward = Vector3.forward;
         TriggerHero = null;
         NextHeroCandidate = null;
         PrevHeroCandidate = null;
@@ -343,6 +356,10 @@ public class ChainAttackManager : MonoBehaviour
     /// </summary>
     private void EnterSelectionPhase()
     {
+        // 체인 선택 진입 시 이전 행동에서 열린 빠른지원 요청을 취소함.
+        QuickAssistManager.Instance?.CloseWindow(
+            QuickAssistCloseReason.ContextInvalidated);
+
         // QTE Timer On
         _currentSelectionTime = _selectionDuration;
         
@@ -382,7 +399,18 @@ public class ChainAttackManager : MonoBehaviour
 
         // PartySwapManager 에게 ChainSwap 요청하되,
         // 실패시 QTE Selection Phase 닫고 InActive로 전환
-        if (!partySwapManager.TryExecuteChainSwap(selectedHero, ChainTarget))
+        Vector3 targetPosition = _chainTargetPosition;
+        Vector3 targetForward = _chainTargetForward;
+
+        // 살아 있는 대상은 현재 위치, 사망·제거된 대상은 개방 시 위치를 사용함.
+        if (ChainTarget != null && ChainTarget.isActiveAndEnabled &&
+            ChainTarget.Status != null && !ChainTarget.Status.IsDead)
+        {
+            targetPosition = ChainTarget.transform.position;
+            targetForward = ChainTarget.transform.forward;
+        }
+
+        if (!partySwapManager.TryExecuteChainSwap(selectedHero, targetPosition, targetForward))
         {
             Debug.LogError($"[Chain 선택 실패] {selectedHero.name}");
 

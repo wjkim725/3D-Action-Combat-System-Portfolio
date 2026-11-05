@@ -8,6 +8,7 @@ using UnityEngine;
 public class EnemyHitChecker : MonoBehaviour
 {
     private Enemy _enemy;
+    private bool _hasPlayedHitImpulseForCurrentMotion;
 
     private void Awake()
     {
@@ -84,13 +85,20 @@ public class EnemyHitChecker : MonoBehaviour
             return;
         }
 
+        if (hitIndex == 0)
+        {
+            _hasPlayedHitImpulseForCurrentMotion = false;
+        }
+
         EnemyCombatDataSO.HitData currentHitData =
             currentMotion.hits[hitIndex];
 
         // CombatEventContext 클래스를 그대로 사용하되,
-        // Attacker, 데미지계수, 경직 타입만 전달
+        // Enemy의 공격자, 판정 범위, 데미지, 경직과 타격음을 전달함.
         CombatEventContext contextPack = new CombatEventContext(
             _enemy,
+            HitDetectionType.MeleeOverlap, // 현재 Enemy 판정은 근접 OverlapSphere 방식
+            currentMotion.hitRadius,      // 판정 생성 시 확정한 모션 반경
             currentHitData.damageMultiplier,
             0f,
             currentHitData.hitType,
@@ -98,7 +106,8 @@ public class EnemyHitChecker : MonoBehaviour
             0f,
             0f,
             0f,
-            false
+            false,
+            hitImpactSFX: currentHitData.hitImpactSFX
         );
 
         Debug.Log(
@@ -107,17 +116,49 @@ public class EnemyHitChecker : MonoBehaviour
             $"타수: {hitIndex + 1}/{currentMotion.hits.Count} " +
             $"({currentHitData.hitName})");
 
-        ExecuteOverlapSphereCheck(
+        bool isHitSuccess = ExecuteOverlapSphereCheck(
             contextPack,
             currentMotion.hitRadius,
             currentMotion.hitForwardOffset
         );
+
+        TryRequestHitImpulse(
+            isHitSuccess,
+            currentHitData.hitType
+        );
     }
 
-    private void ExecuteOverlapSphereCheck(
-    CombatEventContext context,
-    float radius,
-    float forwardOffset)
+    /// <summary>
+    /// 현재 모션에서 최초 유효 타격이 발생했을 때,
+    /// 일반 Hit Impulse 연출을 한 번만 요청합니다.
+    /// </summary>
+    private void TryRequestHitImpulse(
+        bool isHitSuccess,
+        HitType hitType)
+    {
+        if (!isHitSuccess) return;
+        if (_hasPlayedHitImpulseForCurrentMotion) return;
+
+        if (hitType == HitType.None ||
+            hitType == HitType.Parry)       // Parry는 전용 Impulse 연출 존재
+        {
+            return;
+        }
+
+        CombatPresentationManager presentationManager =
+            CombatPresentationManager.Instance;
+
+        if (presentationManager == null) return;
+
+        presentationManager.PlayHitImpulse(hitType);
+
+        _hasPlayedHitImpulseForCurrentMotion = true;
+    }
+
+    private bool ExecuteOverlapSphereCheck(
+        CombatEventContext context,
+        float radius,
+        float forwardOffset)
     {
         Vector3 hitPosition =
             transform.position +
@@ -128,6 +169,8 @@ public class EnemyHitChecker : MonoBehaviour
             radius,
             _enemy.HeroLayerMask
         );
+
+        bool isHitSuccess = false;
 
         foreach (Collider targetCollider in hitTargets)
         {
@@ -178,8 +221,11 @@ public class EnemyHitChecker : MonoBehaviour
             context.ImpactPoint = impactPoint;
             context.ImpactDirection = impactDirection;
 
-            CombatManager.Instance.ProcessHit(context);
+            isHitSuccess |=
+                CombatManager.Instance.ProcessHit(context);
         }
+
+        return isHitSuccess;
     }
 
     #endregion

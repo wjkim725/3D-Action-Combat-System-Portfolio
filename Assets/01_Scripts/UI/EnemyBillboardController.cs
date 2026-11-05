@@ -17,9 +17,37 @@ public class EnemyBillboardController : MonoBehaviour
     [SerializeField] private Slider _groggySlider;
     [SerializeField] private TextMeshProUGUI _groggyBonusDMG;
 
+    [Header("Billboard Presentation")]
+    [SerializeField] private TextMeshProUGUI _groggyValue;
+    [SerializeField] private Image _groggyFill;
+    [SerializeField] private Image _hpDamageTrail;
+    [SerializeField] private Sprite _normalGroggySprite;
+    [SerializeField] private Sprite _activeGroggySprite;
+    [SerializeField] private Sprite _spentGroggySprite;
+    [SerializeField] private Color _normalGroggyColor = new Color(1f, 0.85f, 0.27f);
+    [SerializeField] private Color _activeGroggyColor = new Color(0.13f, 0.84f, 0.94f);
+    [SerializeField] private Color _spentGroggyColor = new Color(0.76f, 0.8f, 0.85f);
+    [SerializeField] private Color _damageMultiplierColor = new Color(1f, 0.85f, 0.27f);
+
+    [Header("HP Damage Trail")]
+    [SerializeField, Min(0f)] private float _damageTrailDelay = 0.25f;
+    [SerializeField, Min(0.01f)] private float _damageTrailSpeed = 0.65f;
+
+    private bool _hasHPValue;
+    private float _previousHPRatio;
+    private float _damageTrailResumeTime;
+
     private Transform _mainCameraTransform;
 
     private ChainAttackManager _chainAttackManager;
+
+    #region [생명주기 영역]
+
+    private void OnEnable()
+    {
+        // 재활성화 직후의 체력은 피격으로 표현하지 않음.
+        _hasHPValue = false;
+    }
 
     private void Start()
     {
@@ -70,73 +98,140 @@ public class EnemyBillboardController : MonoBehaviour
 
     private void Update()
     {
-        // 빌보드 로직: 캔버스가 항상 카메라를 똑바로 바라보게 만듭니다.
+        UpdateEnemyUI();
+    }
+
+    private void LateUpdate()
+    {
+        if (_mainCameraTransform == null && Camera.main != null)
+        {
+            _mainCameraTransform = Camera.main.transform;
+        }
+
         if (_mainCameraTransform != null)
         {
             transform.rotation = _mainCameraTransform.rotation;
         }
-
-        // 데이터 실시간 반영
-        UpdateEnemyUI();
     }
 
+    #endregion
+
+    #region [표시 갱신 영역]
+
+    /// <summary>
+    /// 기존 Enemy 상태에서 체력, 그로기 수치와 상태별 외형을 갱신함.
+    /// </summary>
     private void UpdateEnemyUI()
     {
-        // 적 본체와 스탯 컴포넌트가 확실히 존재할 때만 로직 실행
-        if (_enemy != null && _enemy.Status != null)
-        {
-            // 인스펙터 누락 시 에러 방지
-            if (_groggyBonusDMG != null)
-            {
-                if (_enemy.Status is IEnemyStatus enemyStatus)
-                {
-                    if(_status.IsGroggy)
-                    {
-                        _groggyBonusDMG.text = $"{enemyStatus.GroggyDamageMultiplier}%";
-                        _groggyBonusDMG.color = Color.red;
-                    }
-                    else
-                    {
-                        _groggyBonusDMG.text = "100%";
-                        _groggyBonusDMG.color = Color.white;
-                    }
-                }
-                else
-                {
-                    _groggyBonusDMG.text = "100%";
-                }
-            }
+        if (_status == null) return;
 
-            // 적 체력 실시간 반영
-            float maxHp = _enemy.Status.TotalMaxHP;
-            _hpSlider.value = maxHp > 0f ? (_enemy.Status.CurrentHP / maxHp) : 0f;
+        float hpRatio = _status.TotalMaxHP > 0f
+            ? Mathf.Clamp01(_status.CurrentHP / _status.TotalMaxHP)
+            : 0f;
+        if (_hpSlider != null) _hpSlider.SetValueWithoutNotify(hpRatio);
+        UpdateDamageTrail(hpRatio);
+
+        bool isGroggy = _status.IsGroggy;
+        float groggyRatio = _status.MaxGroggyGauge > 0f
+            ? _status.CurrentGroggyGauge / _status.MaxGroggyGauge
+            : 0f;
+        if (isGroggy)
+        {
+            groggyRatio = _groggy != null ? _groggy.GroggyTimeRatio : 0f;
         }
 
-        // 적 그로기 게이지 및 연장 타이머 실시간 반영
-        if (_groggy != null)
+        groggyRatio = Mathf.Clamp01(groggyRatio);
+        if (_groggySlider != null) _groggySlider.SetValueWithoutNotify(groggyRatio);
+
+        Sprite groggySprite = _normalGroggySprite;
+        Color groggyColor = _normalGroggyColor;
+        if (isGroggy)
         {
-            if (_status.IsGroggy)
+            if (_groggy != null && _groggy.CanConsumeChainAttack)
             {
-                _groggySlider.value = _groggy.GroggyTimeRatio;
+                groggySprite = _activeGroggySprite;
+                groggyColor = _activeGroggyColor;
             }
             else
             {
-                float maxGroggy = _status.MaxGroggyGauge;
-                _groggySlider.value = maxGroggy > 0f ? (_status.CurrentGroggyGauge / maxGroggy) : 0f;
+                groggySprite = _spentGroggySprite;
+                groggyColor = _spentGroggyColor;
+            }
+        }
+
+        if (_groggyFill != null && groggySprite != null && _groggyFill.sprite != groggySprite)
+        {
+            _groggyFill.sprite = groggySprite;
+        }
+        if (_groggyValue != null)
+        {
+            _groggyValue.SetText("{0}%", Mathf.CeilToInt(groggyRatio * 100f));
+            _groggyValue.color = groggyColor;
+        }
+        if (_groggyBonusDMG != null)
+        {
+            if (_groggyBonusDMG.gameObject.activeSelf != isGroggy)
+            {
+                _groggyBonusDMG.gameObject.SetActive(isGroggy);
+            }
+            if (isGroggy)
+            {
+                _groggyBonusDMG.SetText("DMG {0}%", _status.GroggyDamageMultiplier);
+                _groggyBonusDMG.color = _damageMultiplierColor;
             }
         }
     }
 
+    /// <summary>
+    /// 피격 전 체력의 잔상을 잠시 유지한 후 현재 체력으로 감소시킴.
+    /// </summary>
+    private void UpdateDamageTrail(float hpRatio)
+    {
+        if (_hpDamageTrail == null) return;
+
+        if (!_hasHPValue || hpRatio > _previousHPRatio)
+        {
+            _hpDamageTrail.fillAmount = hpRatio;
+            _hasHPValue = true;
+            _damageTrailResumeTime = 0f;
+        }
+        else if (hpRatio < _previousHPRatio)
+        {
+            _hpDamageTrail.fillAmount = Mathf.Max(_hpDamageTrail.fillAmount, _previousHPRatio);
+            _damageTrailResumeTime = Time.time + _damageTrailDelay;
+        }
+
+        if (Time.time >= _damageTrailResumeTime)
+        {
+            _hpDamageTrail.fillAmount = Mathf.MoveTowards(
+                _hpDamageTrail.fillAmount, hpRatio, _damageTrailSpeed * Time.deltaTime);
+        }
+        _previousHPRatio = hpRatio;
+    }
+
+    #endregion
+
+    #region [체인 선택 표시 영역]
+
+    /// <summary>
+    /// 체인 선택 중 적 UI를 숨김.
+    /// </summary>
     private void HandleChainSelectionOpened()
     {
         SetEnemyBillboardActive(false);
     }
 
+    /// <summary>
+    /// 체인 선택 종료 시 적 UI를 복원함.
+    /// </summary>
     private void HandleChainSelectionClosed()
     {
         SetEnemyBillboardActive(true);
     }
 
+    /// <summary>
+    /// 컨트롤러를 유지한 채 표시 루트의 활성 상태만 변경함.
+    /// </summary>
     private void SetEnemyBillboardActive(bool isActive)
     {
         if (_enemyBillboardRoot != null)
@@ -144,4 +239,6 @@ public class EnemyBillboardController : MonoBehaviour
             _enemyBillboardRoot.SetActive(isActive);
         }
     }
+
+    #endregion
 }
