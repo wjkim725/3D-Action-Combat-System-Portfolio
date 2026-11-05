@@ -42,7 +42,6 @@ public class Hero : MonoBehaviour, IDamageable, IAttacker
     public HeroActionRegistry ActionRegistry { get; private set; }
     public HeroSwapSystem SwapSystem { get; private set; }
     public HeroWeapon Weapon { get; private set; }
-    public HeroCombatDetector CombatDetector { get; private set; }
     public HeroVFX VFX { get; private set; }
     public HeroHitReaction HitReaction { get; private set; }
     public HeroAudio Audio { get; private set; }
@@ -195,7 +194,6 @@ public class Hero : MonoBehaviour, IDamageable, IAttacker
         ActionRegistry = GetComponent<HeroActionRegistry>();
         SwapSystem = GetComponent<HeroSwapSystem>();
         Weapon = GetComponent<HeroWeapon>();
-        CombatDetector = GetComponent<HeroCombatDetector>();
         VFX = GetComponent<HeroVFX>();
         HitReaction = GetComponent<HeroHitReaction>();
         Audio = GetComponent<HeroAudio>();
