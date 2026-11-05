@@ -351,6 +351,10 @@ public class EveMechanic : MonoBehaviour, IHeroMechanic
 
     /// <summary>
     /// 직접 호출 또는 현재 재생 대상으로 유지되는 기본 레이어 상태의 이벤트만 허용함.
+    /// -> 해당 메서드 AI한테 맡기다 보니 과설계된 경향이 있음.
+    /// 의도는 Aniamtor의 동일 State 가 아니면 애니메이션 이벤트의 작동을 차단하는 로직인데,
+    /// 딱히 그런상황이 발생하지도 않게 Aniamtor 구성이 되있기도 하고,
+    /// 다른 HeroMechanic에서 사용하는것과 일관성도 찾기 어렵다.
     /// </summary>
     public bool CanProcessAnimationEvent(AnimationEvent animationEvent)
     {

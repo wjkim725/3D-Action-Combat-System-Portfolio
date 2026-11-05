@@ -143,41 +143,51 @@ public class HeroHitChecker : MonoBehaviour
     #endregion
 
 
-    #region [중심 코어 : 데이터 추출 및 판정 방식 분기]
+    #region [타격 데이터 추출]
 
     /// <summary>
-    /// 공격 시퀀스에서 타격 데이터를 추출하고 지정된 공격 종류로 판정을 실행함.
+    /// 애니메이션 이벤트의 Combo/Hit 인덱스로 모션과 타격 데이터를 선택함.
+    /// 일반 공격은 해당 Hit의 판정 또는 발사를 요청하고,
+    /// 설치형 모션은 최초 이벤트에서 전체 타격 일정을 가진 설치기 생성을 요청함.
     /// </summary>
     private void ExecuteGenericHitRegistry(List<HeroCombatDataSO.MotionSequenceData> sequenceList, int comboIndex, int hitIndex, string debugActionName,
         HeroCombatAttackType attackType)
     {
-        // 1. 디펜시브 코드
         if (_hero.CombatData == null || sequenceList == null || sequenceList.Count == 0 ||
             comboIndex < 0 || hitIndex < 0) return;
 
-        // 2. 모션(Combo) 인덱스 안전 범위 보정
-        if (comboIndex >= sequenceList.Count)
-            comboIndex = sequenceList.Count - 1;
+        // 모션(Combo) 인덱스 안전 범위 보정
+        if (comboIndex >= sequenceList.Count) comboIndex = sequenceList.Count - 1;
 
         HeroCombatDataSO.MotionSequenceData currentMotion = sequenceList[comboIndex];
 
-        // 3. 다단히트(Hit) 인덱스 안전 범위 보정
+        // 모션에 타격 데이터가 없으면 경고를 출력하고 처리를 중단함.
         if (currentMotion.hits == null || currentMotion.hits.Count == 0)
         {
             Debug.LogWarning($"[{debugActionName}] {currentMotion.motionName}에 세부 Hit 데이터가 존재하지 않습니다.");
             return;
         }
 
-        // 인덱스 보정 전에 분기하여 후속 이벤트가 첫 타격으로 보정되는 것을 방지함.
+        /// <summary>
+        /// PlacedArea 우선 처리
+        /// 첫 Hit가 PlacedArea이면 모션 전체를 설치형으로 처리함.
+        /// PlacedArea 방식의 공격은 PlacedAreaController 컴포넌트를 통해 자체적으로 전달받은 데이터를 기준으로 판정 요청.
+        /// 전체 Hit의 방식 검증과 타격 일정 구성은 ExecutePlacedAreaMotion에서 수행함.
+        /// hits가 하나일 때 후속 hitIndex를 먼저 보정하면 0이 되어 설치기를 다시 생성하므로,
+        /// 인덱스 보정 전에 원래 이벤트 인덱스로 설치 여부를 판단함.
+        /// </summary>
         if (currentMotion.hits[0].hitDetectionType == HitDetectionType.PlacedArea)
         {
-            // 설치형 공격 실행
+            // 최초 이벤트에서 전체 타격 일정 전달을 요청함.
+            // 이후 타격은 PlacedAreaController가 시간에 따라 실행하므로 후속 로직은 무시.
             if (hitIndex == 0) ExecutePlacedAreaMotion(currentMotion, attackType, comboIndex);
             return;
         }
 
-        if (hitIndex >= currentMotion.hits.Count)
-            hitIndex = currentMotion.hits.Count - 1;
+        /// <summary>
+        /// MeleeOverlap & Projectile 차선 처리
+        /// </summary>
+        if (hitIndex >= currentMotion.hits.Count) hitIndex = currentMotion.hits.Count - 1;
 
         // 새 모션의 첫 HitFrame에서 Impulse 장부 초기화
         if (hitIndex == 0)
@@ -185,26 +195,28 @@ public class HeroHitChecker : MonoBehaviour
             _hasPlayedHitImpulseForCurrentMotion = false;
         }
 
-        // 4. 타격 타수별 구조체 데이터 초기화
+        // 타격 타수별 구조체 데이터 초기화
         HeroCombatDataSO.HitData currentHitData = currentMotion.hits[hitIndex];
 
-        // 5. CombatEventContext 인스턴스 생성 및 데이터 초기화
+        // CombatEventContext 인스턴스 생성 및 데이터 초기화
         CombatEventContext contextPack = CreateHitContext(currentMotion, currentHitData, attackType, comboIndex);
 
         Debug.Log($"[HitChecker 판정완료] {debugActionName} -> 모션: {currentMotion.motionName} | 타수: {hitIndex + 1}/{currentMotion.hits.Count}타 ({currentHitData.hitName})");
 
-        // 6. HitData에 설정된 물리 판정 방식으로 전달
+        // HitData에 설정된 물리 판정 방식으로 전달
         bool isHitSuccess = ExecuteHitDetection(
             contextPack,
             currentHitData,
             currentMotion);
 
-        // 근접 공격은 실제 타격 성공 시 Impulse를 요청함.
-        // 투사체는 ExecuteHitDetection 내부에서 발사 성공 시 요청함.
+        // 근접 공격은 실제 타격 성공 시 Impulse를 요청
+        // 투사체는 ExecuteHitDetection 내부에서 발사 성공 시 요청
         // 설치형은 별도 모션 경로에서 처리되어 이 위치에 도달하지 않음.
         TryRequestHitImpulse(
             isHitSuccess,
             currentHitData.hitType);
+        // 해당 Camera Hit Impulse 연출처리 콜백으로 했으면 더 좋았을듯?
+
     }
 
     /// <summary>
@@ -278,6 +290,11 @@ public class HeroHitChecker : MonoBehaviour
             comboIndex: attackType == HeroCombatAttackType.NormalAttack ? comboIndex : -1);
     }
 
+    #endregion
+
+
+    #region [설치형 공격 실행]
+
     /// <summary>
     /// 전체 타격 정보와 누적 실행 시간을 구성하여 설치기 하나를 생성 요청함.
     /// </summary>
@@ -342,15 +359,16 @@ public class HeroHitChecker : MonoBehaviour
         return value >= 0f && !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
+    #endregion
+
+
+    #region [판정 방식별 실행]
+
     /// <summary>
-    /// Hero의 hitDetectionType에 맞춰 
-    /// 실제 타격 물리적 검출 및
-    /// CombatManager - ProcessHit 진입
+    /// 개별 Hit의 판정 방식에 따라 근접 판정 또는 투사체 발사를 요청함.
+    /// 설치형은 상위 Registry에서 모션 전체를 별도로 처리하므로 이 경로에서는 허용하지 않음.
     /// </summary>
-    /// <param name="context"></param>
-    /// <param name="hitData"></param>
-    /// <param name="motionData"></param>
-    /// <returns></returns>
+    /// <returns>근접 판정의 실제 적중 성공 여부를 반환함. 투사체 발사와 오류 경로는 false를 반환함.</returns>
     private bool ExecuteHitDetection(
         CombatEventContext context,
         HeroCombatDataSO.HitData hitData,
@@ -374,8 +392,6 @@ public class HeroHitChecker : MonoBehaviour
                         $"[{name}] MeleeHitDetector가 연결되지 않았습니다.");
                     return false;
                 }
-
-                // TODO : 전용 VFX 프리팹이 있다면 재생
 
                 return _meleeHitDetector.Execute(
                     context,
@@ -403,6 +419,9 @@ public class HeroHitChecker : MonoBehaviour
                 return false;
 
             case HitDetectionType.PlacedArea:
+                // 정상적인 설치형 모션은 상위 Registry에서 처리되어 이 분기에 도달하지 않음.
+                // 첫 Hit는 일반 타격인데 후속 Hit만 PlacedArea인 혼합 구성을 오류로 차단함.
+                // 여기서 설치기를 생성하면 모션 전체 일정이 개별 Hit마다 중복 등록될 수 있음.
                 Debug.LogError($"[{name}] 설치형 타격은 모션 전체가 PlacedArea여야 합니다.", this);
                 return false;
 

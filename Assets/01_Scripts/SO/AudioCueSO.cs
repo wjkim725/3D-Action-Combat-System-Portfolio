@@ -1,4 +1,4 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 using UnityEngine.Audio;
 
 [CreateAssetMenu(fileName = "AudioCueSO", menuName = "Scriptable Objects/AudioCueSO")]
@@ -11,31 +11,31 @@ public class AudioCueSO : ScriptableObject
     }
 
     [Header("Audio Clips")]
-    [Tooltip("°°Àº ¿ëµµ·Î ±³Ã¼ Àç»ıÇÒ ¼ö ÀÖ´Â Å¬¸³ ÈÄº¸")]
+    [Tooltip("ê°™ì€ ìš©ë„ë¡œ êµì²´ ì¬ìƒí•  ìˆ˜ ìˆëŠ” í´ë¦½ í›„ë³´")]
     [SerializeField] private AudioClip[] _clips;
 
     [SerializeField]
     private ClipSelectionMode _selectionMode = ClipSelectionMode.Random;
 
-    [Tooltip("·£´ı ¼±ÅÃ ½Ã Á÷Àü¿¡ ¼±ÅÃÇÑ ÈÄº¸ÀÇ ¿¬¼Ó Àç»ı ¹æÁö")]
+    [Tooltip("ëœë¤ ì„ íƒ ì‹œ ì§ì „ì— ì„ íƒí•œ í›„ë³´ì˜ ì—°ì† ì¬ìƒ ë°©ì§€")]
     [SerializeField] private bool _avoidImmediateRepeat = true;
 
     [Header("Playback")]
     [SerializeField, Range(0f, 1f)]
     private float _volume = 1f;
 
-    [Tooltip("Àç»ı ½ÃÀÛ ½Ã ¼±ÅÃÇÒ ÇÇÄ¡ ¹üÀ§. ¿øº» ÇÇÄ¡´Â (1, 1)")]
+    [Tooltip("ì¬ìƒ ì‹œì‘ ì‹œ ì„ íƒí•  í”¼ì¹˜ ë²”ìœ„. ì›ë³¸ í”¼ì¹˜ëŠ” (1, 1)")]
     [SerializeField] private Vector2 _pitchRange = Vector2.one;
 
     [SerializeField] private AudioMixerGroup _outputMixerGroup;
 
     [Header("Spatial Audio")]
-    [Tooltip("0Àº 2D, 1Àº 3D Àç»ı")]
+    [Tooltip("0ì€ 2D, 1ì€ 3D ì¬ìƒ")]
     [SerializeField, Range(0f, 1f)]
     private float _spatialBlend = 0f;
 
 
-    #region [¼³Á¤ Á¶È¸]
+    #region [ì„¤ì • ì¡°íšŒ]
 
     public int ClipCount => _clips != null ? _clips.Length : 0;
     public ClipSelectionMode SelectionMode => _selectionMode;
@@ -49,7 +49,7 @@ public class AudioCueSO : ScriptableObject
 
 
     /// <summary>
-    /// ÁöÁ¤ÇÑ ÈÄº¸ ÀÎµ¦½ºÀÇ Å¬¸³À» ¹İÈ¯ÇÔ.
+    /// ì§€ì •í•œ í›„ë³´ ì¸ë±ìŠ¤ì˜ í´ë¦½ì„ ë°˜í™˜í•¨.
     /// </summary>
     public AudioClip GetClip(int index)
     {
@@ -61,10 +61,10 @@ public class AudioCueSO : ScriptableObject
 
     #endregion
 
-    #region [¼³Á¤ °ËÁõ]
+    #region [ì„¤ì • ê²€ì¦]
 
     /// <summary>
-    /// Å¬¸³ ÈÄº¸°¡ Á¸ÀçÇÏ¸ç ¸ğµç Ç×¸ñ¿¡ Å¬¸³ÀÌ ÇÒ´çµÇ¾î ÀÖ´ÂÁö ¹İÈ¯ÇÔ.
+    /// í´ë¦½ í›„ë³´ê°€ ì¡´ì¬í•˜ë©° ëª¨ë“  í•­ëª©ì— í´ë¦½ì´ í• ë‹¹ë˜ì–´ ìˆëŠ”ì§€ ë°˜í™˜í•¨.
     /// </summary>
     public bool HasValidClips()
     {
@@ -84,7 +84,7 @@ public class AudioCueSO : ScriptableObject
     {
         _volume = Mathf.Clamp01(_volume);
 
-        // Á¤¹æÇâ Àç»ıÀ» »ç¿ëÇÏ¸ç 0 ÇÇÄ¡·Î ÀÎÇÑ Àç»ı Á¤Áö¸¦ ¹æÁöÇÔ.
+        // ì •ë°©í–¥ ì¬ìƒì„ ì‚¬ìš©í•˜ë©° 0 í”¼ì¹˜ë¡œ ì¸í•œ ì¬ìƒ ì •ì§€ë¥¼ ë°©ì§€í•¨.
         float minimumPitch = Mathf.Min(_pitchRange.x, _pitchRange.y);
         float maximumPitch = Mathf.Max(_pitchRange.x, _pitchRange.y);
 

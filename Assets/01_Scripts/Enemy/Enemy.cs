@@ -99,8 +99,6 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         // 타겟 갱신
         if (PartyStateManager.Instance != null)
             _heroTransform = PartyStateManager.Instance.CurrentHero.transform;
-
-        
     }
 
     private void Update()
