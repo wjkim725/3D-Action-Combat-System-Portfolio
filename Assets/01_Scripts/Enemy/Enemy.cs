@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 
 
@@ -36,7 +36,8 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
     public Transform HeroTransform => _heroTransform;
 
     // 공격 중 AI 판단을 잠시 끌 플래그 - 애니메이션 이벤트나 EnterState-Idle 로 제어
-    public bool IsAIControlSuspended => _isAIControlSuspended;
+    public bool IsAIControlSuspended => _isAIControlSuspended ||
+        (Animation != null && Animation.IsBlendingToIdle);
     public EnemyAttackPattern CurrentAttackPattern => _currentAttackPattern;
     public List<EnemyPatternDataSO> PatternDataList => _patternDataList;
 
@@ -99,6 +100,10 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         // 타겟 갱신
         if (PartyStateManager.Instance != null)
             _heroTransform = PartyStateManager.Instance.CurrentHero.transform;
+
+        // 초기 Idle은 상태 변경 검사를 통과하지 않으므로 최초 진입 처리를 직접 수행함.
+        if (CurrentState == EnemyState.Idle && !Status.IsDead)
+            EnterState(EnemyState.Idle);
     }
 
     private void Update()
@@ -130,6 +135,7 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
 
     private void OnDisable()
     {
+        Animation?.ClearIdleBlendWait();
         CombatManager.Instance?.CloseDefenseWindow(this);
         if (Groggy != null)
         {
@@ -144,6 +150,7 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
     /// </summary>
     private void EnterState(EnemyState newState)
     {
+        if (newState != EnemyState.Idle) Animation.ClearIdleBlendWait();
         _currentState = newState;
 
         switch (CurrentState)
@@ -367,6 +374,7 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
 
     /// <summary>
     /// 행동 모드를 변경하고 기존 자율 이동과 공격을 정리함.
+    /// 공격과 전투 대기는 Idle로 블렌딩한 뒤 새 AI 행동을 재개함.
     /// 피격, 그로기와 사망 상태는 중단하지 않으며 비활성 소환체에도 설정할 수 있음.
     /// </summary>
     public void SetAIMode(EnemyAIMode mode)
@@ -376,6 +384,9 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
 
         // 비활성 프리팹은 Awake 이전에 모드만 지정할 수 있음.
         if (Status == null) return;
+
+        bool shouldInterruptCombatAnimation = !Status.IsDead &&
+            (CurrentState == EnemyState.Attack || CurrentState == EnemyState.CombatIdle);
 
         if (CurrentState != EnemyState.Hit &&
             CurrentState != EnemyState.Groggy &&
@@ -388,6 +399,8 @@ public class Enemy : MonoBehaviour, IDamageable, IAttacker
         Movement.CompleteOrbiting();
         ActionRegistry.ResetPatternSequence();
         AI.ResetBehavior();
+
+        if (shouldInterruptCombatAnimation) Animation.BlendToIdle();
     }
 
     #endregion

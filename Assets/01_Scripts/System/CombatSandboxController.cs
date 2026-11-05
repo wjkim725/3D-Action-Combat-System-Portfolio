@@ -20,6 +20,32 @@ public class CombatSandboxController : MonoBehaviour
     [SerializeField] private Button _spawnBerserkerButton;
     [SerializeField] private Button _removeAllEnemiesButton;
 
+    [System.Serializable]
+    private class EnemyAIModeButton
+    {
+        public Button button;
+        public RawImage background;
+        public Text label;
+        public GameObject checkmark;
+
+        /// <summary>
+        /// 모드 버튼의 표시 참조가 모두 연결되었는지 반환함.
+        /// </summary>
+        public bool HasReferences()
+        {
+            return button != null && background != null && label != null && checkmark != null;
+        }
+    }
+
+    [Header("Enemy AI")]
+    [SerializeField] private EnemyAIModeButton _normalModeButton;
+    [SerializeField] private EnemyAIModeButton _passiveModeButton;
+    [SerializeField] private EnemyAIModeButton _stationaryModeButton;
+    [SerializeField] private Texture _selectedModeTexture;
+    [SerializeField] private Texture _unselectedModeTexture;
+
+    private EnemyAIMode _enemyAIMode = EnemyAIMode.Normal;
+
     [Header("Spawn")]
     [SerializeField, Min(1)] private int _maxEnemyCount = 6;
     [SerializeField] private Enemy _mutantPrefab;
@@ -43,7 +69,11 @@ public class CombatSandboxController : MonoBehaviour
             _infiniteDecibelToggle == null || _spawnMutantButton == null ||
             _spawnBerserkerButton == null || _removeAllEnemiesButton == null || _mutantPrefab == null ||
             _berserkerPrefab == null || _spawnedEnemiesRoot == null ||
-            _spawnPoints == null || _spawnPoints.Length == 0)
+            _spawnPoints == null || _spawnPoints.Length == 0 ||
+            _normalModeButton == null || !_normalModeButton.HasReferences() ||
+            _passiveModeButton == null || !_passiveModeButton.HasReferences() ||
+            _stationaryModeButton == null || !_stationaryModeButton.HasReferences() ||
+            _selectedModeTexture == null || _unselectedModeTexture == null)
         {
             Debug.LogError("CombatSandboxController: 파티, UI 및 소환 참조를 확인해야 함.", this);
             enabled = false;
@@ -57,6 +87,9 @@ public class CombatSandboxController : MonoBehaviour
         _spawnMutantButton.onClick.AddListener(SpawnMutant);
         _spawnBerserkerButton.onClick.AddListener(SpawnBerserker);
         _removeAllEnemiesButton.onClick.AddListener(RemoveAllEnemies);
+        _normalModeButton.button.onClick.AddListener(HandleNormalModeClicked);
+        _passiveModeButton.button.onClick.AddListener(HandlePassiveModeClicked);
+        _stationaryModeButton.button.onClick.AddListener(HandleStationaryModeClicked);
         _isInitialized = true;
         ResetOptions();
     }
@@ -75,6 +108,9 @@ public class CombatSandboxController : MonoBehaviour
         if (_spawnMutantButton != null) _spawnMutantButton.onClick.RemoveListener(SpawnMutant);
         if (_spawnBerserkerButton != null) _spawnBerserkerButton.onClick.RemoveListener(SpawnBerserker);
         if (_removeAllEnemiesButton != null) _removeAllEnemiesButton.onClick.RemoveListener(RemoveAllEnemies);
+        if (_normalModeButton.button != null) _normalModeButton.button.onClick.RemoveListener(HandleNormalModeClicked);
+        if (_passiveModeButton.button != null) _passiveModeButton.button.onClick.RemoveListener(HandlePassiveModeClicked);
+        if (_stationaryModeButton.button != null) _stationaryModeButton.button.onClick.RemoveListener(HandleStationaryModeClicked);
     }
 
     /// <summary>
@@ -92,6 +128,7 @@ public class CombatSandboxController : MonoBehaviour
         if (_invincibilityToggle != null) _invincibilityToggle.isOn = false;
         if (_infiniteEnergyToggle != null) _infiniteEnergyToggle.isOn = false;
         if (_infiniteDecibelToggle != null) _infiniteDecibelToggle.isOn = false;
+        SetEnemyAIMode(EnemyAIMode.Normal);
     }
 
     #endregion
@@ -135,6 +172,67 @@ public class CombatSandboxController : MonoBehaviour
         if (!CanExecute()) return;
         foreach (Hero hero in _partyMembers)
             if (hero != null) hero.Status.SetSandboxInfiniteDecibel(isEnabled);
+    }
+
+    #endregion
+
+    #region [몬스터 AI 옵션]
+
+    /// <summary>
+    /// 일반 전투 모드 버튼 입력을 처리함.
+    /// </summary>
+    private void HandleNormalModeClicked()
+    {
+        if (CanExecute()) SetEnemyAIMode(EnemyAIMode.Normal);
+    }
+
+    /// <summary>
+    /// 이동 전용 모드 버튼 입력을 처리함.
+    /// </summary>
+    private void HandlePassiveModeClicked()
+    {
+        if (CanExecute()) SetEnemyAIMode(EnemyAIMode.Passive);
+    }
+
+    /// <summary>
+    /// 제자리 대기 모드 버튼 입력을 처리함.
+    /// </summary>
+    private void HandleStationaryModeClicked()
+    {
+        if (CanExecute()) SetEnemyAIMode(EnemyAIMode.Stationary);
+    }
+
+    /// <summary>
+    /// 현재 및 이후 소환 몬스터의 모드를 지정하고 선택 표시를 동기화함.
+    /// 컨트롤러 비활성화 시 초기화 경로에서도 호출함.
+    /// </summary>
+    private void SetEnemyAIMode(EnemyAIMode mode)
+    {
+        _enemyAIMode = mode;
+        if (_spawnedEnemiesRoot != null)
+        {
+            foreach (Enemy enemy in _spawnedEnemiesRoot.GetComponentsInChildren<Enemy>(true))
+            {
+                if (enemy.Status != null && enemy.Status.IsDead) continue;
+                enemy.SetAIMode(mode);
+            }
+        }
+
+        RefreshModeButton(_normalModeButton, mode == EnemyAIMode.Normal);
+        RefreshModeButton(_passiveModeButton, mode == EnemyAIMode.Passive);
+        RefreshModeButton(_stationaryModeButton, mode == EnemyAIMode.Stationary);
+    }
+
+    /// <summary>
+    /// 선택 여부에 맞춰 버튼 배경, 글자색과 체크 표시를 갱신함.
+    /// </summary>
+    private void RefreshModeButton(EnemyAIModeButton modeButton, bool isSelected)
+    {
+        if (modeButton.background != null)
+            modeButton.background.texture = isSelected ? _selectedModeTexture : _unselectedModeTexture;
+        if (modeButton.label != null)
+            modeButton.label.color = isSelected ? Color.black : Color.white;
+        if (modeButton.checkmark != null) modeButton.checkmark.SetActive(isSelected);
     }
 
     #endregion
@@ -191,6 +289,7 @@ public class CombatSandboxController : MonoBehaviour
                 radius, _spawnBlockingLayers, QueryTriggerInteraction.Ignore)) continue;
 
             Enemy spawned = Instantiate(prefab, point.position, rotation, _spawnedEnemiesRoot);
+            spawned.SetAIMode(_enemyAIMode);
             spawned.gameObject.SetActive(true);
             LockOnManager lockOnManager = LockOnManager.Instance;
             if (lockOnManager != null && lockOnManager.MagneticTarget == null)

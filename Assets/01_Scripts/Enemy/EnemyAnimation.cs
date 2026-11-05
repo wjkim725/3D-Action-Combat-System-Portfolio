@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using UnityEngine;
 
 public class EnemyAnimation : MonoBehaviour
@@ -10,6 +10,13 @@ public class EnemyAnimation : MonoBehaviour
     private bool _useDirectionalMovement;
 
     public bool UsesDirectionalMovement => _useDirectionalMovement;
+
+    [Header("AI Mode Transition")]
+    private float _idleReturnBlendDuration = 0.15f;
+    public bool IsBlendingToIdle { get; private set; }
+    private int _idleBlendStartFrame;
+    // 해당 필드에 들어갈 값 주의 -> Animator의 기본 Idle State 이름은 Idle_Base 로 통일.
+    private static readonly int HashIdleBaseState = Animator.StringToHash("Base Layer.Idle.Idle_Base");
 
     // 역경직 코루틴용 필드
     private Coroutine _hitStopCoroutine;
@@ -30,6 +37,68 @@ public class EnemyAnimation : MonoBehaviour
     {
         Animator = GetComponent<Animator>();
     }
+
+    private void Update()
+    {
+        CheckIdleBlendCompletion();
+    }
+
+    private void OnDisable()
+    {
+        ClearIdleBlendWait();
+    }
+
+    #region [AI 모드 전환]
+
+    /// <summary>
+    /// 실제 Animator의 Idle 블렌딩 완료를 확인하고 AI 재개 대기를 해제함.
+    /// </summary>
+    private void CheckIdleBlendCompletion()
+    {
+        if (!IsBlendingToIdle || Time.frameCount <= _idleBlendStartFrame) return;
+
+        // 일시정지 중 시간을 세지 않고 실제 Animator의 Idle 도착을 확인함.
+        if (!Animator.IsInTransition(0) &&
+            Animator.GetCurrentAnimatorStateInfo(0).fullPathHash == HashIdleBaseState)
+        {
+            IsBlendingToIdle = false;
+        }
+    }
+
+    /// <summary>
+    /// 중단된 공격의 역경직을 해제하고 Idle로 블렌딩하며 완료까지 AI 재개를 보류함.
+    /// </summary>
+    public void BlendToIdle()
+    {
+        if (!Animator.HasState(0, HashIdleBaseState))
+        {
+            Debug.LogError("EnemyAnimation: AI 모드 전환에 필요한 Idle 상태가 없습니다.", this);
+            return;
+        }
+
+        if (_hitStopCoroutine != null)
+        {
+            StopCoroutine(_hitStopCoroutine);
+            _hitStopCoroutine = null;
+            SetAnimatorSpeed(1f);
+        }
+
+        SetIsIdle(true);
+        _idleBlendStartFrame = Time.frameCount;
+        IsBlendingToIdle = true;
+        Animator.CrossFadeInFixedTime(HashIdleBaseState, _idleReturnBlendDuration, 0, 0f);
+    }
+
+    /// <summary>
+    /// 피격, 그로기, 사망 또는 비활성화 시 모드 전환 대기만 해제함.
+    /// 새 상태의 애니메이션과 AI 정지 여부는 해당 상태의 기존 처리를 따름.
+    /// </summary>
+    public void ClearIdleBlendWait()
+    {
+        IsBlendingToIdle = false;
+    }
+
+    #endregion
 
     /// <summary>
     /// 외부(CombatManager)에서 역경직을 명령할 때 호출
