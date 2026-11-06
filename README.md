@@ -16,7 +16,11 @@ Unity 6로 **Zenless Zone Zero의 전투 흐름을 분석하고 재구현한 개
 | 소스 갱신 기준 | 2026-11-05 |
 | 공개 소스 범위 | `Assets/01_Scripts` — `Scrapped_Scripts` 제외, `Assets/08_InputActions` |
 
-플레이 영상과 별도 포트폴리오 문서 링크는 추후 추가 예정입니다.
+## 플레이 영상 및 다운로드
+
+[![3D 액션 전투 시스템 플레이 영상 보기](https://i.ytimg.com/vi/3J3e1WNU7Qk/hqdefault.jpg)](https://youtu.be/3J3e1WNU7Qk)
+
+[▶ 플레이 영상 보기 (YouTube)](https://youtu.be/3J3e1WNU7Qk) · [실행 빌드 다운로드 (Google Drive)](https://drive.google.com/file/d/19tVe1WzKEw1KDXtovKh3nXWw-WiJKmGJ/view?usp=sharing) · [포트폴리오 PDF 열기](./docs/KimWonjoon_Unity_Client_Portfolio.pdf)
 
 ## 목차
 
